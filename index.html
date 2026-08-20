@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Comptoir — Tableau de bord</title>
+<link rel="stylesheet" href="styles.css?v=21">
+</head>
+<body>
+<div id="authRoot"></div>
+<div class="app" id="appRoot" style="display:none;">
+  <aside class="sidebar">
+    <div class="brand">
+      <svg viewBox="50 50 500 470" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+        <path d="M445 92C386 34 302 0 208 0C93 0 0 93 0 208s93 208 208 208c94 0 178-34 237-92l-65-65c-43 40-102 63-172 63-63 0-114-51-114-114S145 94 208 94c70 0 129 23 172 63z" fill="var(--logo-deep)" transform="translate(75 75)"/>
+        <path d="M16 264c31 91 106 152 192 152 71 0 135-27 184-73l-66-65c-31 28-72 44-118 44-44 0-82-24-100-58-17-31-14-56-14-56-21 14-51 37-78 56z" fill="var(--logo-mid)" transform="translate(75 75)"/>
+        <g transform="translate(205 210)">
+          <path d="M78 0l80 42-80 44L0 42z" fill="var(--logo-bright)"/>
+          <path d="M0 42l78 44v88L0 130z" fill="var(--logo-deep)"/>
+          <path d="M158 42L78 86v88l80-44z" fill="var(--logo-light)"/>
+          <path d="M78 4v82M49 25l79 42" stroke="#fff" stroke-width="9" fill="none"/>
+        </g>
+      </svg>
+      <span>Comptoir</span>
+    </div>
+    <nav class="primary" id="nav"></nav>
+    <div class="sidebar-foot">
+      <div class="connector-status" id="connectorStatus"></div>
+      <div class="plan-chip">Forfait <b id="planChipLabel">—</b></div>
+      <div class="account-row">
+        <span id="userEmailLabel" class="account-email"></span>
+        <button class="account-logout" data-action="logout" type="button">Déconnexion</button>
+      </div>
+    </div>
+  </aside>
+  <main id="main"></main>
+</div>
+<div id="modalRoot"></div>
+<div class="toast-stack" id="toastStack"></div>
+<script type="module" src="app.js?v=21"></script>
+</body>
+</html>

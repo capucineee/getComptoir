@@ -1,0 +1,2 @@
+# Comptoir's backend uses only the Python standard library — no dependencies to install.
+# This file exists so hosting platforms detect the project as Python.
