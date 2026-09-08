@@ -22,7 +22,11 @@ import sys
 import urllib.parse
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
-DB_PATH = os.path.join(ROOT, "comptoir.db")
+# On most hosts the container's own filesystem is wiped on every redeploy, which would
+# silently delete every user's account and data. COMPTOIR_DB_PATH lets the deploy point
+# the database at a persistent volume (e.g. Railway) instead; it falls back to a plain
+# local file for development, where that risk doesn't apply.
+DB_PATH = os.environ.get("COMPTOIR_DB_PATH") or os.path.join(ROOT, "comptoir.db")
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 PBKDF2_ITERATIONS = 100_000
 SESSION_TTL_DAYS = 30
