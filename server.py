@@ -20,6 +20,7 @@ import secrets
 import sqlite3
 import sys
 import threading
+import unicodedata
 import urllib.parse
 from datetime import datetime, timezone
 
@@ -296,12 +297,18 @@ def _pick_field(source, aliases):
     return None
 
 
+def _strip_accents(text):
+    return "".join(c for c in unicodedata.normalize("NFKD", text) if not unicodedata.combining(c))
+
+
 def _normalize_status(raw):
     """Returns (status, note) — note is set when the input didn't match a known alias
     and we fell back to 'preparation', so the caller can see what happened."""
     if raw in (None, ""):
         return "preparation", None
-    key = str(raw).strip().lower().replace("-", "_").replace(" ", "_")
+    # French status words are often accented ("livrée", "préparation") — match
+    # regardless, since the aliases below are written unaccented.
+    key = _strip_accents(str(raw).strip().lower()).replace("-", "_").replace(" ", "_")
     if key in ORDER_STATUSES:
         return key, None
     for status, aliases in STATUS_ALIASES.items():
