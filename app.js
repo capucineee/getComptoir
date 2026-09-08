@@ -13,6 +13,7 @@ const CHANNEL_META = {
   etsy: { label: 'Etsy', color: 'var(--cat-etsy)', initials: 'Et' },
   instagram: { label: 'Instagram Shop', color: 'var(--cat-instagram)', initials: 'Ig' },
   woocommerce: { label: 'WooCommerce', color: 'var(--cat-woocommerce)', initials: 'Wc' },
+  tiktok: { label: 'TikTok Shop', color: 'var(--cat-tiktok)', initials: 'Tk' },
   custom: { label: 'Personnalisé', color: 'var(--cat-custom)', initials: '{}' }
 };
 
@@ -39,6 +40,10 @@ const FIELD_CATALOG = {
   woocommerce: [
     { key: 'woo_notes', label: 'Notes de commande' },
     { key: 'woo_coupon', label: 'Code promo utilisé' }
+  ],
+  tiktok: [
+    { key: 'tiktok_video_ref', label: 'Vidéo associée' },
+    { key: 'tiktok_creator', label: 'Créateur partenaire' }
   ],
   custom: [
     { key: 'ext_ref', label: 'Référence externe' },
@@ -67,6 +72,9 @@ const SAV_FIELD_CATALOG = {
   ],
   woocommerce: [
     { key: 'woo_refund_id', label: 'Référence remboursement' }
+  ],
+  tiktok: [
+    { key: 'tiktok_case_sav', label: 'Litige TikTok Shop' }
   ],
   custom: [
     { key: 'ext_sav_ref', label: 'Référence SAV externe' },
@@ -149,14 +157,27 @@ function seedData() {
     return 'retour';
   }
 
+  const costPrices = [14, 6, 18, 12, 3, 2.5, 9, 22];
+  const products = productNames.map((name, i) => ({
+    id: uid(),
+    name,
+    stock: [3, 24, 9, 40, 60, 11, 2, 18][i],
+    threshold: 12,
+    costPrice: costPrices[i],
+    channels: i % 3 === 0 ? ['shopify', 'custom'] : i % 3 === 1 ? ['instagram'] : ['shopify', 'etsy']
+  }));
+
   const orders = [];
   for (let i = 0; i < 260; i++) {
     const daysBack = Math.random() * 89;
     const type = pickChannel();
+    const eligible = products.filter(p => p.channels.includes(type));
+    const product = (eligible.length ? eligible : products)[Math.floor(Math.random() * (eligible.length ? eligible.length : products.length))];
     orders.push({
       id: uid(),
       orderNumber: 1000 + i,
       channelType: type,
+      productId: product.id,
       customer: customers[Math.floor(Math.random() * customers.length)],
       amount: Math.round((18 + Math.random() * 122) * 100) / 100,
       status: pickStatus(),
@@ -165,14 +186,6 @@ function seedData() {
     });
   }
   orders.sort((a, b) => new Date(b.date) - new Date(a.date));
-
-  const products = productNames.map((name, i) => ({
-    id: uid(),
-    name,
-    stock: [3, 24, 9, 40, 60, 11, 2, 18][i],
-    threshold: 12,
-    channels: i % 3 === 0 ? ['shopify', 'custom'] : i % 3 === 1 ? ['instagram'] : ['shopify', 'etsy']
-  }));
 
   const returnOrders = orders.filter(o => o.status === 'retour').slice(0, 6);
   const savTickets = returnOrders.map((o, i) => ({
@@ -207,24 +220,51 @@ function seedData() {
   };
 }
 
-/* ---------- store ---------- */
+/* ---------- store ----------
+ * Source of truth is the server (GET/PUT /api/state, one JSON document per
+ * account — see server.py). localStorage is kept only as an instant local
+ * cache: it paints something before the network round-trip resolves in
+ * boot(), and it's a fallback if the server is briefly unreachable. */
 const STORAGE_KEY = 'comptoir-proto-v1';
-function loadState() {
+function loadLocalCache() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) return JSON.parse(raw);
   } catch (e) {}
-  return seedData();
+  return null;
 }
-let state = loadState();
-state.customFields = state.customFields || [];
-state.customFields.forEach(f => { f.source = f.source || 'manual'; });
-state.orders.forEach(o => { o.custom = o.custom || {}; });
-state.customers = state.customers || buildCustomerDirectory();
-state.accent = state.accent || 'teal';
-state.savFields = state.savFields || [];
-state.savTickets.forEach(t => { t.custom = t.custom || {}; });
-function persist() { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); }
+function migrateState(s) {
+  s.customFields = s.customFields || [];
+  s.customFields.forEach(f => { f.source = f.source || 'manual'; });
+  s.orders.forEach(o => { o.custom = o.custom || {}; });
+  s.customers = s.customers || buildCustomerDirectory();
+  s.accent = s.accent || 'teal';
+  s.savFields = s.savFields || [];
+  s.savTickets.forEach(t => { t.custom = t.custom || {}; });
+  const defaultCosts = { 'Étole en lin écru': 14, 'Bougie Cèdre 220g': 6, 'Sac tissé beige': 18, 'Coussin brodé': 12, 'Carnet ligné kraft': 3, 'Savon artisanal': 2.5, 'Vase en grès': 9, 'Plaid en laine': 22 };
+  s.products.forEach(p => { if (p.costPrice == null) p.costPrice = defaultCosts[p.name] ?? 0; });
+  const byChannel = type => s.products.filter(p => p.channels.includes(type));
+  s.orders.forEach(o => {
+    if (o.productId && s.products.some(p => p.id === o.productId)) return;
+    const eligible = byChannel(o.channelType);
+    const pick = (eligible.length ? eligible : s.products)[Math.floor(Math.random() * (eligible.length ? eligible.length : s.products.length))];
+    o.productId = pick ? pick.id : null;
+  });
+  return s;
+}
+// Placeholder so nothing crashes before boot() resolves the real (server) state.
+let state = migrateState(loadLocalCache() || seedData());
+let persistTimer = null;
+function persist() {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  const session = getSession();
+  if (!session || !session.token) return;
+  clearTimeout(persistTimer);
+  persistTimer = setTimeout(() => {
+    apiRequest('/api/state', { method: 'PUT', token: session.token, body: { data: JSON.stringify(state) } })
+      .catch(() => { toast('Échec de la synchronisation avec le serveur.', true); });
+  }, 500);
+}
 function setState(patch) { Object.assign(state, patch); persist(); render(); }
 
 /* ---------- theme ---------- */
@@ -407,6 +447,20 @@ async function boot() {
     clearSession();
     return renderAuth('login');
   }
+  try {
+    const stateRes = await apiRequest('/api/state', { token: session.token });
+    if (stateRes.data) {
+      state = migrateState(JSON.parse(stateRes.data));
+    } else {
+      // Brand-new account: seed a fresh demo dataset and persist it server-side right away.
+      state = migrateState(seedData());
+      await apiRequest('/api/state', { method: 'PUT', token: session.token, body: { data: JSON.stringify(state) } });
+    }
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  } catch (err) {
+    console.error('Impossible de charger les données depuis le serveur, utilisation du cache local.', err);
+    toast('Connexion au serveur impossible, données locales utilisées.', true);
+  }
   document.getElementById('authRoot').innerHTML = '';
   document.getElementById('appRoot').style.display = '';
   const label = document.getElementById('userEmailLabel');
@@ -444,6 +498,7 @@ const ROUTES = [
   { path: 'sav', label: 'SAV', icon: null },
   { path: 'connecteurs', label: 'Connecteurs', icon: null },
   { path: 'facturation', label: 'Facturation', icon: null },
+  { path: 'comptabilite', label: 'Comptabilité', icon: null },
   { path: 'parametres', label: 'Paramètres', icon: null }
 ];
 function currentPath() { return (location.hash || '#').slice(1); }
@@ -510,6 +565,20 @@ function channelBreakdown(days) {
   return Object.entries(byType)
     .map(([type, amount]) => ({ type, amount, pct: Math.round((amount / total) * 100) }))
     .sort((a, b) => b.amount - a.amount);
+}
+const VAT_RATE = 0.20;
+function orderProduct(o) { return state.products.find(p => p.id === o.productId) || null; }
+function computeAccounting(days) {
+  const cur = ordersInRange(days).filter(o => o.status !== 'retour');
+  const refunded = ordersInRange(days).filter(o => o.status === 'retour');
+  const ttc = cur.reduce((s, o) => s + o.amount, 0);
+  const ht = ttc / (1 + VAT_RATE);
+  const tva = ttc - ht;
+  const cost = cur.reduce((s, o) => { const p = orderProduct(o); return s + (p ? p.costPrice || 0 : 0); }, 0);
+  const margin = ht - cost;
+  const marginPct = ht ? (margin / ht) * 100 : 0;
+  const refundsTotal = refunded.reduce((s, o) => s + o.amount, 0);
+  return { ttc, ht, tva, cost, margin, marginPct, refundsTotal, refundedCount: refunded.length, orders: [...cur, ...refunded].sort((a, b) => new Date(b.date) - new Date(a.date)) };
 }
 function stockAlerts() {
   return state.products.filter(p => p.stock <= p.threshold).sort((a, b) => a.stock - b.stock);
@@ -756,7 +825,7 @@ function pageStock() {
     </div>
     <div class="card">
       <table class="data">
-        <thead><tr><th>Produit</th><th>Canaux</th><th>Seuil</th><th>Stock</th><th>Statut</th></tr></thead>
+        <thead><tr><th>Produit</th><th>Canaux</th><th>Seuil</th><th>Stock</th><th>Coût d'achat</th><th>Statut</th></tr></thead>
         <tbody>
           ${state.products.map(p => `
             <tr>
@@ -764,10 +833,12 @@ function pageStock() {
               <td>${p.channels.map(connectorLabel).join(' + ')}</td>
               <td class="amount">${p.threshold}</td>
               <td class="amount"><input class="stock-input" type="number" min="0" value="${p.stock}" data-stock-id="${p.id}"></td>
+              <td class="amount"><input class="stock-input" type="number" min="0" step="0.01" value="${p.costPrice ?? 0}" data-cost-id="${p.id}"></td>
               <td><span class="status-chip ${alertLevel(p)}"><span class="dot"></span>${alertLevel(p) === 'good' ? 'OK' : alertLevel(p) === 'warning' ? 'Vigilance' : 'Critique'}</span></td>
             </tr>`).join('')}
         </tbody>
       </table>
+      <div class="card-sub" style="margin-top:10px;">Le coût d'achat sert à calculer votre marge dans l'onglet Comptabilité.</div>
     </div>
   `;
 }
@@ -813,7 +884,7 @@ function pageSAV() {
 }
 
 /* ---------- page: connecteurs ---------- */
-const AVAILABLE_TYPES = ['shopify', 'etsy', 'instagram', 'woocommerce'];
+const AVAILABLE_TYPES = ['shopify', 'etsy', 'instagram', 'woocommerce', 'tiktok'];
 function pageConnecteurs() {
   const connected = state.connectors;
   const notConnected = AVAILABLE_TYPES.filter(t => !connected.some(c => c.type === t));
@@ -904,6 +975,88 @@ function pageFacturation() {
 }
 
 /* ---------- page: paramètres ---------- */
+function pageComptabilite() {
+  const days = Number(state.range);
+  const a = computeAccounting(days);
+  const missingCost = state.products.filter(p => !p.costPrice).length;
+  return `
+    <div class="topbar">
+      <div><h1>Comptabilité</h1><div class="sub">Résumé simplifié — ne remplace pas votre comptable</div></div>
+      <div class="topbar-actions">
+        <div class="range">
+          ${['7', '30', '90'].map(d => `<button data-action="setRange" data-range="${d}" class="${state.range === d ? 'active' : ''}">${d} j</button>`).join('')}
+        </div>
+        ${themeToggleHTML()}
+      </div>
+    </div>
+
+    <div class="kpis">
+      <div class="kpi"><div class="label">Chiffre d'affaires TTC</div><div class="row"><span class="value">${fmtEUR(a.ttc)}</span></div></div>
+      <div class="kpi"><div class="label">Chiffre d'affaires HT</div><div class="row"><span class="value">${fmtEUR(a.ht)}</span></div></div>
+      <div class="kpi"><div class="label">TVA collectée (estimée, ${Math.round(VAT_RATE * 100)}%)</div><div class="row"><span class="value">${fmtEUR(a.tva)}</span></div></div>
+      <div class="kpi"><div class="label">Remboursements</div><div class="row"><span class="value" style="color:var(--critical)">${fmtEUR(a.refundsTotal)}</span><span class="delta warning">${a.refundedCount} commande${a.refundedCount !== 1 ? 's' : ''}</span></div></div>
+    </div>
+
+    <div class="grid">
+      <div class="card">
+        <h2>Marge brute</h2>
+        <div class="card-sub">Chiffre d'affaires HT moins coût d'achat des produits vendus</div>
+        <div style="display:flex; align-items:baseline; gap:14px; margin:10px 0 4px;">
+          <span style="font-family:var(--font-mono); font-size:32px; font-weight:600; font-variant-numeric:tabular-nums;">${fmtEUR(a.margin)}</span>
+          <span class="status-chip ${a.marginPct >= 40 ? 'good' : a.marginPct >= 20 ? 'warning' : 'critical'}"><span class="dot"></span>${a.marginPct.toFixed(1)}% de marge</span>
+        </div>
+        <div class="card-sub">Coût d'achat total sur la période : ${fmtEUR(a.cost)}</div>
+        ${missingCost ? `<div class="callout" style="margin-top:14px;">${missingCost} produit${missingCost !== 1 ? 's' : ''} sans coût d'achat renseigné — la marge les compte à 0 €. <a href="#stock" style="color:var(--brand)">Compléter dans Stock →</a></div>` : ''}
+      </div>
+      <div class="card">
+        <h2>Export comptable</h2>
+        <div class="card-sub">Un fichier CSV prêt pour votre comptable ou votre logiciel de compta.</div>
+        <ul class="plain" style="margin-top:6px;">
+          <li>Une ligne par commande, avec montant TTC, HT, TVA, coût et marge</li>
+          <li>Période sélectionnée : ${days} derniers jours (${a.orders.length} commandes)</li>
+        </ul>
+        <button class="btn primary" data-action="exportAccounting" data-days="${days}" style="margin-top:8px;">Télécharger l'export (CSV)</button>
+      </div>
+    </div>
+  `;
+}
+
+function exportAccountingCSV(days) {
+  const a = computeAccounting(days);
+  const header = ['Date', 'Commande', 'Canal', 'Cliente', 'Statut', 'Montant TTC', 'Montant HT', 'TVA', "Coût d'achat", 'Marge'];
+  const rows = a.orders.map(o => {
+    const p = orderProduct(o);
+    const isRefund = o.status === 'retour';
+    const ht = isRefund ? 0 : o.amount / (1 + VAT_RATE);
+    const tva = isRefund ? 0 : o.amount - ht;
+    const cost = isRefund ? 0 : (p ? p.costPrice || 0 : 0);
+    const margin = isRefund ? -o.amount : ht - cost;
+    return [
+      new Date(o.date).toLocaleDateString('fr-FR'),
+      `#${o.orderNumber}`,
+      connectorLabel(o.channelType),
+      o.customer,
+      isRefund ? 'Retour' : 'Vente',
+      o.amount.toFixed(2),
+      ht.toFixed(2),
+      tva.toFixed(2),
+      cost.toFixed(2),
+      margin.toFixed(2)
+    ];
+  });
+  const csvEscape = v => /[";\n]/.test(v) ? `"${String(v).replace(/"/g, '""')}"` : v;
+  const csv = [header, ...rows].map(r => r.map(csvEscape).join(';')).join('\r\n');
+  const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a2 = document.createElement('a');
+  a2.href = url;
+  a2.download = `comptoir-export-comptable-${days}j-${new Date().toISOString().slice(0, 10)}.csv`;
+  document.body.appendChild(a2);
+  a2.click();
+  a2.remove();
+  URL.revokeObjectURL(url);
+}
+
 function pageParametres() {
   return `
     <div class="topbar">
@@ -941,6 +1094,7 @@ function renderNav() {
     'sav': '<path d="M2 3h12v8H5l-3 3z" fill="none" stroke="currentColor" stroke-width="1.3"/>',
     'connecteurs': '<circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M8 5v3l2 2" fill="none" stroke="currentColor" stroke-width="1.3"/>',
     'facturation': '<rect x="2" y="4" width="12" height="8" rx="1.2" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M2 6.5h12" stroke="currentColor" stroke-width="1.3"/>',
+    'comptabilite': '<path d="M3 2h10v12H3z" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M5.5 5h5M5.5 8h5M5.5 11h3" stroke="currentColor" stroke-width="1.3"/>',
     'parametres': '<circle cx="8" cy="8" r="2.2" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M8 1.6v1.6M8 12.8v1.6M14.4 8h-1.6M3.2 8H1.6M12.4 3.6l-1.1 1.1M4.7 11.3l-1.1 1.1M12.4 12.4l-1.1-1.1M4.7 4.7l-1.1-1.1" stroke="currentColor" stroke-width="1.3"/>'
   };
   document.getElementById('nav').innerHTML = ROUTES.map(r => `
@@ -959,7 +1113,7 @@ function render() {
   renderNav();
   const main = document.getElementById('main');
   const path = currentPath();
-  const pages = { '': pageOverview, 'ventes': pageVentes, 'stock': pageStock, 'sav': pageSAV, 'connecteurs': pageConnecteurs, 'facturation': pageFacturation, 'parametres': pageParametres };
+  const pages = { '': pageOverview, 'ventes': pageVentes, 'stock': pageStock, 'sav': pageSAV, 'connecteurs': pageConnecteurs, 'facturation': pageFacturation, 'comptabilite': pageComptabilite, 'parametres': pageParametres };
   main.innerHTML = (pages[path] || pageOverview)();
   if (path === '') {
     const days = Number(state.range);
@@ -977,6 +1131,7 @@ function openAddProductModal() {
       <div class="field"><label>Stock initial</label><input type="number" id="pStock" min="0" value="20"></div>
       <div class="field"><label>Seuil d'alerte</label><input type="number" id="pThreshold" min="0" value="10"></div>
     </div>
+    <div class="field"><label>Coût d'achat (par unité)</label><input type="number" id="pCost" min="0" step="0.01" value="0"></div>
     <div class="field"><label>Canal</label><select id="pChannel">${connectedTypes().map(c => `<option value="${c.type}">${c.label}</option>`).join('')}</select></div>
     <div class="actions"><button class="btn" data-action="closeModal">Annuler</button><button class="btn primary" data-action="submitAddProduct">Ajouter</button></div>
   `);
@@ -1165,6 +1320,11 @@ document.addEventListener('click', e => {
     return;
   }
   if (action === 'setRange') { setState({ range: el.dataset.range }); return; }
+  if (action === 'exportAccounting') {
+    exportAccountingCSV(Number(el.dataset.days));
+    toast('Export téléchargé.');
+    return;
+  }
   if (action === 'closeModal') return closeModal();
 
   if (action === 'authSwitch') return renderAuth(el.dataset.mode);
@@ -1172,6 +1332,7 @@ document.addEventListener('click', e => {
     const session = getSession();
     if (session && session.token) apiRequest('/api/logout', { method: 'POST', token: session.token }).catch(() => {});
     clearSession();
+    localStorage.removeItem(STORAGE_KEY); // don't leave this account's business data cached on a shared machine
     location.hash = '';
     renderAuth('login');
     toast('Vous avez été déconnecté.');
@@ -1213,8 +1374,9 @@ document.addEventListener('click', e => {
     if (!name) return toast('Le nom du produit est requis.', true);
     const stock = Number(document.getElementById('pStock').value) || 0;
     const threshold = Number(document.getElementById('pThreshold').value) || 0;
+    const costPrice = Math.max(0, Number(document.getElementById('pCost').value) || 0);
     const channel = document.getElementById('pChannel').value;
-    state.products.unshift({ id: uid(), name, stock, threshold, channels: [channel] });
+    state.products.unshift({ id: uid(), name, stock, threshold, costPrice, channels: [channel] });
     persist(); closeModal(); render(); toast(`« ${name} » ajouté au suivi de stock.`);
     return;
   }
@@ -1359,6 +1521,10 @@ document.addEventListener('input', e => {
     if (p) { p.stock = clamp(Number(e.target.value) || 0, 0, 99999); persist(); }
     const row = e.target.closest('tr');
     if (row) row.querySelector('.status-chip').outerHTML = `<span class="status-chip ${alertLevel(p)}"><span class="dot"></span>${alertLevel(p) === 'good' ? 'OK' : alertLevel(p) === 'warning' ? 'Vigilance' : 'Critique'}</span>`;
+  }
+  if (e.target.matches('[data-cost-id]')) {
+    const p = state.products.find(p => p.id === e.target.dataset.costId);
+    if (p) { p.costPrice = Math.max(0, Number(e.target.value) || 0); persist(); }
   }
   if (e.target.id === 'salesSearch') { salesFilter.q = e.target.value; renderKeepFocus('salesSearch'); }
 });

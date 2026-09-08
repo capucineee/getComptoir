@@ -28,6 +28,7 @@
   --cat-etsy: #eb6834;
   --cat-instagram: #1baf7a;
   --cat-woocommerce: #eda100;
+  --cat-tiktok: #e87ba4;
   --cat-custom: #4a3aa7;
 
   --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
@@ -41,7 +42,7 @@
     --brand: #35B597; --brand-bright: #5FD1B4; --brand-soft: rgba(53, 181, 151, 0.15);
     --good: #0ca30c; --warning: #fab219; --warning-soft: rgba(250, 178, 25, 0.16);
     --critical: #e66767; --critical-soft: rgba(230, 103, 103, 0.14);
-    --cat-shopify: #3987e5; --cat-etsy: #d95926; --cat-instagram: #199e70; --cat-woocommerce: #c98500; --cat-custom: #9085e9;
+    --cat-shopify: #3987e5; --cat-etsy: #d95926; --cat-instagram: #199e70; --cat-woocommerce: #c98500; --cat-tiktok: #d55181; --cat-custom: #9085e9;
   }
 }
 :root[data-theme="dark"] {
@@ -51,7 +52,7 @@
   --brand: #35B597; --brand-bright: #5FD1B4; --brand-soft: rgba(53, 181, 151, 0.15);
   --good: #0ca30c; --warning: #fab219; --warning-soft: rgba(250, 178, 25, 0.16);
   --critical: #e66767; --critical-soft: rgba(230, 103, 103, 0.14);
-  --cat-shopify: #3987e5; --cat-etsy: #d95926; --cat-instagram: #199e70; --cat-woocommerce: #c98500; --cat-custom: #9085e9;
+  --cat-shopify: #3987e5; --cat-etsy: #d95926; --cat-instagram: #199e70; --cat-woocommerce: #c98500; --cat-tiktok: #d55181; --cat-custom: #9085e9;
 }
 :root[data-theme="light"] {
   --bg: #FFFFFF; --surface: #FFFFFF; --surface-sunken: #F3F4F1;
@@ -60,7 +61,7 @@
   --brand: #146356; --brand-bright: #1F8F79; --brand-soft: rgba(20, 99, 86, 0.09);
   --good: #0ca30c; --warning: #b9790f; --warning-soft: rgba(250, 178, 25, 0.15);
   --critical: #d03b3b; --critical-soft: rgba(208, 59, 59, 0.1);
-  --cat-shopify: #2a78d6; --cat-etsy: #eb6834; --cat-instagram: #1baf7a; --cat-woocommerce: #eda100; --cat-custom: #4a3aa7;
+  --cat-shopify: #2a78d6; --cat-etsy: #eb6834; --cat-instagram: #1baf7a; --cat-woocommerce: #eda100; --cat-tiktok: #e87ba4; --cat-custom: #4a3aa7;
 }
 
 * { box-sizing: border-box; }
@@ -181,6 +182,7 @@ main { flex: 1; padding: 26px 32px 60px; max-width: 1220px; }
 .kpi .delta { font-family: var(--font-mono); font-size: 11.5px; padding: 2px 6px; border-radius: 4px; }
 .kpi .delta.pos { color: var(--good); background: var(--good-soft); }
 .kpi .delta.neg { color: var(--critical); background: var(--critical-soft); }
+.kpi .delta.warning { color: var(--warning); background: var(--warning-soft); }
 .kpi svg.spark { width: 100%; height: 28px; margin-top: 8px; display: block; }
 
 .grid { display: grid; grid-template-columns: 1.6fr 1fr; gap: 14px; margin-bottom: 14px; align-items: start; }

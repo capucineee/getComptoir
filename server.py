@@ -50,6 +50,11 @@ def init_db():
             user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
             created_at TEXT NOT NULL DEFAULT (datetime('now'))
         );
+        CREATE TABLE IF NOT EXISTS app_state (
+            user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+            data TEXT NOT NULL,
+            updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
     """)
     conn.commit()
     conn.close()
@@ -162,6 +167,49 @@ def handle_me(token):
     return user
 
 
+# Comptoir's business data (products, orders, stock, SAV, connectors...) is stored as one
+# JSON document per user, rather than fully normalized tables. This is a deliberate
+# trade-off for an early-stage product: it gives every user their own real, isolated,
+# durable data — the part that matters for testing with real people — without the much
+# larger project of designing and migrating a full relational schema up front. That
+# normalization is the natural next step once the product needs cross-user querying
+# (e.g. the admin/monitoring view from the technical plan) rather than per-user storage.
+MAX_STATE_BYTES = 2_000_000  # 2 MB — generous for this app's data, cheap to guard.
+
+
+def handle_get_state(token):
+    user = user_from_token(token)
+    if not user:
+        raise ApiError(401, "Session invalide ou expirée.")
+    conn = get_db()
+    row = conn.execute("SELECT data FROM app_state WHERE user_id = ?", (user["id"],)).fetchone()
+    conn.close()
+    return {"data": row["data"] if row else None}
+
+
+def handle_put_state(token, body):
+    user = user_from_token(token)
+    if not user:
+        raise ApiError(401, "Session invalide ou expirée.")
+    if "data" not in body or not isinstance(body["data"], str):
+        raise ApiError(400, "Le champ « data » (JSON sérialisé en texte) est requis.")
+    if len(body["data"]) > MAX_STATE_BYTES:
+        raise ApiError(413, "Données trop volumineuses.")
+    try:
+        json.loads(body["data"])  # must itself be valid JSON
+    except json.JSONDecodeError:
+        raise ApiError(400, "Le champ « data » doit être du JSON valide.")
+    conn = get_db()
+    conn.execute(
+        """INSERT INTO app_state (user_id, data, updated_at) VALUES (?, ?, datetime('now'))
+           ON CONFLICT(user_id) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at""",
+        (user["id"], body["data"]),
+    )
+    conn.commit()
+    conn.close()
+    return {"ok": True}
+
+
 class Handler(http.server.SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=ROOT, **kwargs)
@@ -221,7 +269,25 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 return self._send_json(200, handle_me(self._bearer_token()))
             except ApiError as e:
                 return self._send_json(e.status, {"error": e.message})
+        if path == "/api/state":
+            try:
+                return self._send_json(200, handle_get_state(self._bearer_token()))
+            except ApiError as e:
+                return self._send_json(e.status, {"error": e.message})
         return super().do_GET()
+
+    def do_PUT(self):
+        path = urllib.parse.urlparse(self.path).path
+        if path != "/api/state":
+            self.send_error(404)
+            return
+        try:
+            body = self._read_json_body()
+            return self._send_json(200, handle_put_state(self._bearer_token(), body))
+        except ApiError as e:
+            self._send_json(e.status, {"error": e.message})
+        except Exception as e:  # pragma: no cover
+            self._send_json(500, {"error": f"Erreur serveur : {e}"})
 
     def log_message(self, fmt, *args):
         sys.stderr.write("%s - %s\n" % (self.address_string(), fmt % args))
