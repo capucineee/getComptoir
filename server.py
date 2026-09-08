@@ -266,6 +266,68 @@ def handle_delete_connector(token, connector_id):
     return {"ok": True}
 
 
+# Every external site names its fields differently — one shop's API says "total", another
+# says "montant" or "amount". Rather than force every integrator onto one exact schema,
+# ingestion recognizes the common aliases (case-insensitive) and picks whichever is present.
+FIELD_ALIASES = {
+    "amount": ["amount", "total", "totalAmount", "total_amount", "montant", "price", "totalPrice", "total_price", "grandTotal", "grand_total", "total_ttc", "totalTtc"],
+    "externalId": ["externalId", "external_id", "id", "orderId", "order_id", "reference", "ref", "orderRef", "order_ref", "orderNumber", "order_number", "number"],
+    "date": ["date", "created_at", "createdAt", "order_date", "orderDate", "date_creation", "dateCreation"],
+    "status": ["status", "state", "statut", "orderStatus", "order_status"],
+    "customerName": ["customerName", "customer_name", "client", "clientName", "client_name", "nom_client", "buyer", "buyerName", "name"],
+    "productName": ["productName", "product_name", "product", "article", "item", "itemName", "item_name", "designation"],
+}
+STATUS_ALIASES = {
+    "livree": {"livree", "delivered", "shipped", "completed", "complete", "fulfilled", "paid", "payee", "done"},
+    "preparation": {"preparation", "pending", "processing", "en_attente", "created", "new", "confirmed", "awaiting", "open", "en_preparation"},
+    "retour": {"retour", "refunded", "returned", "cancelled", "canceled", "annulee", "rembourse", "refund"},
+}
+
+
+def _pick_field(source, aliases):
+    """Case-insensitive lookup of the first alias present with a non-empty value."""
+    if not isinstance(source, dict):
+        return None
+    lower_map = {str(k).strip().lower(): v for k, v in source.items()}
+    for alias in aliases:
+        val = lower_map.get(alias.lower())
+        if val not in (None, ""):
+            return val
+    return None
+
+
+def _normalize_status(raw):
+    """Returns (status, note) — note is set when the input didn't match a known alias
+    and we fell back to 'preparation', so the caller can see what happened."""
+    if raw in (None, ""):
+        return "preparation", None
+    key = str(raw).strip().lower().replace("-", "_").replace(" ", "_")
+    if key in ORDER_STATUSES:
+        return key, None
+    for status, aliases in STATUS_ALIASES.items():
+        if key in aliases:
+            return status, None
+    return "preparation", f"Statut « {raw} » non reconnu — mis en « preparation » par défaut."
+
+
+def _parse_amount(raw):
+    if raw is None:
+        return None
+    if isinstance(raw, (int, float)):
+        return float(raw)
+    s = re.sub(r"[^\d,.\-]", "", str(raw)).strip()
+    if not s:
+        return None
+    if "," in s and "." not in s:
+        s = s.replace(",", ".")
+    elif "," in s and "." in s:
+        s = s.replace(",", "")  # comma read as a thousands separator
+    try:
+        return float(s)
+    except ValueError:
+        return None
+
+
 def handle_ingest_order(api_key, body):
     if not api_key:
         raise ApiError(401, "Clé API manquante.")
@@ -278,30 +340,48 @@ def handle_ingest_order(api_key, body):
         raise ApiError(401, "Clé API invalide ou révoquée.")
     user_id, connector_id = row["user_id"], row["connector_id"]
 
-    try:
-        amount = float(body.get("amount"))
-    except (TypeError, ValueError):
+    if not isinstance(body, dict):
         conn.close()
-        raise ApiError(400, "Le champ « amount » (montant TTC, nombre) est requis.")
+        raise ApiError(400, "Le corps de la requête doit être un objet JSON.")
+
+    amount = _parse_amount(_pick_field(body, FIELD_ALIASES["amount"]))
+    if amount is None:
+        conn.close()
+        raise ApiError(400, "Montant introuvable — envoyez un champ « amount » (ou total/montant/price...) avec un nombre.")
     if amount < 0:
         conn.close()
         raise ApiError(400, "Le montant ne peut pas être négatif.")
-    status = body.get("status") or "preparation"
-    if status not in ORDER_STATUSES:
-        conn.close()
-        raise ApiError(400, f"« status » doit être l'un de : {', '.join(sorted(ORDER_STATUSES))}.")
-    external_id = str(body.get("externalId") or "").strip() or None
-    date = body.get("date") or None
+
+    status, status_note = _normalize_status(_pick_field(body, FIELD_ALIASES["status"]))
+
+    external_id_raw = _pick_field(body, FIELD_ALIASES["externalId"])
+    external_id = str(external_id_raw).strip() if external_id_raw not in (None, "") else None
+
+    date = _pick_field(body, FIELD_ALIASES["date"])
     if date:
         try:
-            datetime.fromisoformat(date.replace("Z", "+00:00"))  # validate only; store as given
+            datetime.fromisoformat(str(date).replace("Z", "+00:00"))  # validate only; store as given
         except ValueError:
             conn.close()
-            raise ApiError(400, "« date » doit être au format ISO 8601 (ex. 2026-09-08T10:00:00Z).")
+            raise ApiError(400, "La date fournie doit être au format ISO 8601 (ex. 2026-09-08T10:00:00Z).")
     else:
         date = datetime.now(timezone.utc).isoformat()
-    customer_name = str(body.get("customerName") or "").strip() or "Client"
-    product_name = str(body.get("productName") or "").strip() or None
+
+    customer_name = _pick_field(body, FIELD_ALIASES["customerName"])
+    if not customer_name and isinstance(body.get("customer"), dict):
+        customer_name = _pick_field(body["customer"], ["name", "fullName", "full_name", "nom"])
+    customer_name = str(customer_name).strip() if customer_name not in (None, "") else "Client"
+
+    product_name = _pick_field(body, FIELD_ALIASES["productName"])
+    if not product_name:
+        items = body.get("items") or body.get("products") or body.get("lineItems") or body.get("line_items")
+        if isinstance(items, list) and items:
+            first = items[0]
+            if isinstance(first, dict):
+                product_name = _pick_field(first, FIELD_ALIASES["productName"] + ["title", "label"])
+            elif isinstance(first, str):
+                product_name = first
+    product_name = str(product_name).strip() if product_name not in (None, "") else None
 
     with STATE_LOCK:
         state_row = conn.execute("SELECT data FROM app_state WHERE user_id = ?", (user_id,)).fetchone()
@@ -349,7 +429,10 @@ def handle_ingest_order(api_key, body):
         )
         conn.commit()
     conn.close()
-    return {"ok": True, "orderId": order["id"], "orderNumber": order["orderNumber"]}
+    result = {"ok": True, "orderId": order["id"], "orderNumber": order["orderNumber"]}
+    if status_note:
+        result["note"] = status_note
+    return result
 
 
 class Handler(http.server.SimpleHTTPRequestHandler):

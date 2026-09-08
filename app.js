@@ -1406,7 +1406,7 @@ document.addEventListener('click', e => {
           </div>
           <div class="modal-sub" style="margin-top:14px;">Exemple d'appel :</div>
           <div class="api-box"><pre style="white-space:pre-wrap; word-break:break-all; margin:0; font-family:var(--font-mono); font-size:12px;">${escapeHTML(curlExample)}</pre></div>
-          <div class="modal-sub" style="margin-top:14px;">Champs : <code>amount</code> (obligatoire) et <code>status</code> (livree / preparation / retour) — <code>externalId</code>, <code>date</code>, <code>customerName</code>, <code>productName</code> optionnels. <code>externalId</code> évite les doublons si l'appel est renvoyé deux fois.</div>
+          <div class="modal-sub" style="margin-top:14px;">Seul le montant est obligatoire. Les noms de champs sont reconnus automatiquement : <code>amount</code>/<code>total</code>/<code>montant</code>/<code>price</code>, <code>status</code>/<code>statut</code>/<code>state</code> (accepte aussi delivered/shipped/pending/refunded...), <code>customerName</code>/<code>client</code>/ou un objet <code>customer: {name}</code>, <code>productName</code>/<code>product</code>/ou un tableau <code>items</code>. Pas besoin de reformater exactement — envoyez ce que renvoie déjà le site. <code>externalId</code> évite les doublons si l'appel est renvoyé deux fois.</div>
           <div class="actions"><button class="btn primary" data-action="closeModal">Terminé</button></div>
         `;
         render(); toast(`Connecteur « ${name} » créé.`);
