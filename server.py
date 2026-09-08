@@ -19,7 +19,9 @@ import re
 import secrets
 import sqlite3
 import sys
+import threading
 import urllib.parse
+from datetime import datetime, timezone
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 # On most hosts the container's own filesystem is wiped on every redeploy, which would
@@ -58,6 +60,13 @@ def init_db():
             user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
             data TEXT NOT NULL,
             updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE TABLE IF NOT EXISTS api_keys (
+            key TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            connector_id TEXT NOT NULL,
+            label TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
         );
     """)
     conn.commit()
@@ -214,6 +223,135 @@ def handle_put_state(token, body):
     return {"ok": True}
 
 
+# Real inbound integration for platforms Comptoir doesn't have a built-in connector for
+# (a custom homemade shop, a no-code site whose owner's own backend can call out). The
+# user generates an API key from the app; her site's backend calls POST /api/ingest/orders
+# with that key whenever an order happens. One global lock serializes the read-modify-write
+# on app_state across both this path and PUT /api/state — simple and correct at this stage's
+# traffic; sharding per user is the natural upgrade once concurrent writers matter.
+STATE_LOCK = threading.Lock()
+ORDER_STATUSES = {"livree", "preparation", "retour"}
+
+
+def handle_create_connector(token, body):
+    user = user_from_token(token)
+    if not user:
+        raise ApiError(401, "Session invalide ou expirée.")
+    label = str(body.get("label", "")).strip()
+    if not label:
+        raise ApiError(400, "Le nom de la plateforme est requis.")
+    connector_id = secrets.token_hex(8)
+    api_key = "cpt_live_" + secrets.token_hex(24)
+    conn = get_db()
+    conn.execute(
+        "INSERT INTO api_keys (key, user_id, connector_id, label) VALUES (?, ?, ?, ?)",
+        (api_key, user["id"], connector_id, label),
+    )
+    conn.commit()
+    conn.close()
+    return {"connectorId": connector_id, "apiKey": api_key}
+
+
+def handle_delete_connector(token, connector_id):
+    user = user_from_token(token)
+    if not user:
+        raise ApiError(401, "Session invalide ou expirée.")
+    conn = get_db()
+    conn.execute(
+        "DELETE FROM api_keys WHERE user_id = ? AND connector_id = ?",
+        (user["id"], connector_id),
+    )
+    conn.commit()
+    conn.close()
+    return {"ok": True}
+
+
+def handle_ingest_order(api_key, body):
+    if not api_key:
+        raise ApiError(401, "Clé API manquante.")
+    conn = get_db()
+    row = conn.execute(
+        "SELECT user_id, connector_id FROM api_keys WHERE key = ?", (api_key,)
+    ).fetchone()
+    if not row:
+        conn.close()
+        raise ApiError(401, "Clé API invalide ou révoquée.")
+    user_id, connector_id = row["user_id"], row["connector_id"]
+
+    try:
+        amount = float(body.get("amount"))
+    except (TypeError, ValueError):
+        conn.close()
+        raise ApiError(400, "Le champ « amount » (montant TTC, nombre) est requis.")
+    if amount < 0:
+        conn.close()
+        raise ApiError(400, "Le montant ne peut pas être négatif.")
+    status = body.get("status") or "preparation"
+    if status not in ORDER_STATUSES:
+        conn.close()
+        raise ApiError(400, f"« status » doit être l'un de : {', '.join(sorted(ORDER_STATUSES))}.")
+    external_id = str(body.get("externalId") or "").strip() or None
+    date = body.get("date") or None
+    if date:
+        try:
+            datetime.fromisoformat(date.replace("Z", "+00:00"))  # validate only; store as given
+        except ValueError:
+            conn.close()
+            raise ApiError(400, "« date » doit être au format ISO 8601 (ex. 2026-09-08T10:00:00Z).")
+    else:
+        date = datetime.now(timezone.utc).isoformat()
+    customer_name = str(body.get("customerName") or "").strip() or "Client"
+    product_name = str(body.get("productName") or "").strip() or None
+
+    with STATE_LOCK:
+        state_row = conn.execute("SELECT data FROM app_state WHERE user_id = ?", (user_id,)).fetchone()
+        if not state_row:
+            conn.close()
+            raise ApiError(409, "Compte non initialisé — connectez-vous une première fois à l'application avant d'envoyer des commandes.")
+        data = json.loads(state_row["data"])
+        orders = data.setdefault("orders", [])
+
+        if external_id:
+            existing = next((o for o in orders if o.get("externalId") == external_id), None)
+            if existing:
+                conn.close()
+                return {"ok": True, "duplicate": True, "orderId": existing["id"], "orderNumber": existing["orderNumber"]}
+
+        product_id = None
+        if product_name:
+            match = next((p for p in data.get("products", []) if p.get("name", "").strip().lower() == product_name.lower()), None)
+            if match:
+                product_id = match["id"]
+
+        next_number = max([o.get("orderNumber", 0) for o in orders], default=1000) + 1
+        order = {
+            "id": secrets.token_hex(8),
+            "orderNumber": next_number,
+            "channelType": "custom",
+            "connectorId": connector_id,
+            "productId": product_id,
+            "customer": customer_name,
+            "amount": round(amount, 2),
+            "status": status,
+            "date": date,
+            "custom": {},
+            "externalId": external_id,
+        }
+        orders.insert(0, order)
+
+        new_data = json.dumps(data)
+        if len(new_data) > MAX_STATE_BYTES:
+            conn.close()
+            raise ApiError(413, "Données trop volumineuses — impossible d'ajouter cette commande.")
+        conn.execute(
+            "UPDATE app_state SET data = ?, updated_at = datetime('now') WHERE user_id = ?",
+            (new_data, user_id),
+        )
+        conn.commit()
+    conn.close()
+    return {"ok": True, "orderId": order["id"], "orderNumber": order["orderNumber"]}
+
+
 class Handler(http.server.SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=ROOT, **kwargs)
@@ -260,6 +398,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 return self._send_json(200, handle_login(body))
             if path == "/api/logout":
                 return self._send_json(200, handle_logout(self._bearer_token()))
+            if path == "/api/connectors/custom":
+                return self._send_json(200, handle_create_connector(self._bearer_token(), body))
+            if path == "/api/ingest/orders":
+                return self._send_json(200, handle_ingest_order(self._bearer_token(), body))
             raise ApiError(404, "Route inconnue.")
         except ApiError as e:
             self._send_json(e.status, {"error": e.message})
@@ -288,6 +430,19 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         try:
             body = self._read_json_body()
             return self._send_json(200, handle_put_state(self._bearer_token(), body))
+        except ApiError as e:
+            self._send_json(e.status, {"error": e.message})
+        except Exception as e:  # pragma: no cover
+            self._send_json(500, {"error": f"Erreur serveur : {e}"})
+
+    def do_DELETE(self):
+        path = urllib.parse.urlparse(self.path).path
+        match = re.match(r"^/api/connectors/([^/]+)$", path)
+        if not match:
+            self.send_error(404)
+            return
+        try:
+            return self._send_json(200, handle_delete_connector(self._bearer_token(), match.group(1)))
         except ApiError as e:
             self._send_json(e.status, {"error": e.message})
         except Exception as e:  # pragma: no cover

@@ -1385,23 +1385,37 @@ document.addEventListener('click', e => {
   if (action === 'submitAddCustom') {
     const name = document.getElementById('cName').value.trim();
     if (!name) return toast('Le nom de la plateforme est requis.', true);
-    const apiKey = 'cpt_live_' + uid() + uid();
-    const conn = { id: uid(), type: 'custom', label: name, status: 'connected', connectedAt: new Date().toISOString(), lastSync: new Date().toISOString(), apiKey };
-    state.connectors.push(conn); persist();
-    document.getElementById('modalBody').innerHTML = `
-      <h3>${name} connecté</h3>
-      <div class="modal-sub">Transmettez ces informations à votre développeur.</div>
-      <div class="api-box">
-        <div class="line"><span>Clé API</span><span class="copy" data-action="copyKey" data-key="${apiKey}">Copier</span></div>
-        <div style="word-break:break-all; margin-bottom:8px;">${apiKey}</div>
-        <div class="line"><span>Endpoint commandes</span></div>
-        <div>POST https://api.getcomptoir.com/v1/orders</div>
-        <div class="line" style="margin-top:6px;"><span>Endpoint stock</span></div>
-        <div>POST https://api.getcomptoir.com/v1/stock</div>
-      </div>
-      <div class="actions"><button class="btn primary" data-action="closeModal">Terminé</button></div>
-    `;
-    render(); toast(`Connecteur « ${name} » créé.`);
+    const session = getSession();
+    const submitBtn = el;
+    submitBtn.disabled = true;
+    submitBtn.textContent = 'Génération…';
+    apiRequest('/api/connectors/custom', { method: 'POST', token: session.token, body: { label: name } })
+      .then(({ connectorId, apiKey }) => {
+        const conn = { id: connectorId, type: 'custom', label: name, status: 'connected', connectedAt: new Date().toISOString(), lastSync: new Date().toISOString(), apiKey };
+        state.connectors.push(conn); persist();
+        const endpoint = `${location.origin}/api/ingest/orders`;
+        const curlExample = `curl -X POST ${endpoint} \\\n  -H "Authorization: Bearer ${apiKey}" \\\n  -H "Content-Type: application/json" \\\n  -d '{"externalId":"CMD-1234","amount":42.90,"status":"livree","customerName":"Jeanne Dupont","productName":"Étole en lin écru"}'`;
+        document.getElementById('modalBody').innerHTML = `
+          <h3>${escapeHTML(name)} connecté</h3>
+          <div class="modal-sub">Transmettez ces informations à votre développeur — chaque nouvelle commande sur ${escapeHTML(name)} doit déclencher cet appel.</div>
+          <div class="api-box">
+            <div class="line"><span>Clé API</span><span class="copy" data-action="copyKey" data-key="${apiKey}">Copier</span></div>
+            <div style="word-break:break-all; margin-bottom:8px;">${apiKey}</div>
+            <div class="line"><span>Endpoint commandes</span></div>
+            <div>POST ${endpoint}</div>
+          </div>
+          <div class="modal-sub" style="margin-top:14px;">Exemple d'appel :</div>
+          <div class="api-box"><pre style="white-space:pre-wrap; word-break:break-all; margin:0; font-family:var(--font-mono); font-size:12px;">${escapeHTML(curlExample)}</pre></div>
+          <div class="modal-sub" style="margin-top:14px;">Champs : <code>amount</code> (obligatoire) et <code>status</code> (livree / preparation / retour) — <code>externalId</code>, <code>date</code>, <code>customerName</code>, <code>productName</code> optionnels. <code>externalId</code> évite les doublons si l'appel est renvoyé deux fois.</div>
+          <div class="actions"><button class="btn primary" data-action="closeModal">Terminé</button></div>
+        `;
+        render(); toast(`Connecteur « ${name} » créé.`);
+      })
+      .catch(err => {
+        submitBtn.disabled = false;
+        submitBtn.textContent = 'Générer la clé';
+        toast(err.message, true);
+      });
     return;
   }
   if (action === 'copyKey') {
@@ -1449,6 +1463,13 @@ document.addEventListener('click', e => {
     const c = state.connectors.find(c => c.id === el.dataset.id);
     state.connectors = state.connectors.filter(c => c.id !== el.dataset.id);
     persist(); render(); toast(`${c?.label ?? 'Connecteur'} déconnecté.`);
+    if (c?.type === 'custom') {
+      const session = getSession();
+      if (session && session.token) {
+        apiRequest(`/api/connectors/${c.id}`, { method: 'DELETE', token: session.token })
+          .catch(() => { toast('La clé API n\'a pas pu être révoquée côté serveur.', true); });
+      }
+    }
     return;
   }
 
