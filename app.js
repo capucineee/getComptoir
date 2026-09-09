@@ -158,12 +158,17 @@ function seedData() {
   }
 
   const costPrices = [14, 6, 18, 12, 3, 2.5, 9, 22];
+  const salePrices = [32, 15, 42, 28, 8, 7, 24, 55];
+  const suppliers = ['Atelier Nord', 'Cire & Co', 'Fibres Douces', 'Atelier Nord', 'Papeterie Belloc', 'Savonnerie du Lac', 'Grès & Terre', 'Fibres Douces'];
   const products = productNames.map((name, i) => ({
     id: uid(),
     name,
     stock: [3, 24, 9, 40, 60, 11, 2, 18][i],
     threshold: 12,
     costPrice: costPrices[i],
+    salePrice: salePrices[i],
+    supplier: suppliers[i],
+    custom: {},
     channels: i % 3 === 0 ? ['shopify', 'custom'] : i % 3 === 1 ? ['instagram'] : ['shopify', 'etsy']
   }));
 
@@ -211,6 +216,7 @@ function seedData() {
     customFields: [],
     savFields: [],
     savTickets,
+    catalogFields: [],
     plan: { tier: 'multicanal', renewsAt: isoDaysAgo(-14) },
     billingHistory: [
       { id: uid(), date: isoDaysAgo(16), amount: 19, tier: 'Multicanal' },
@@ -235,6 +241,7 @@ function emptyState() {
     customFields: [],
     savFields: [],
     savTickets: [],
+    catalogFields: [],
     plan: { tier: 'decouverte', renewsAt: isoDaysAgo(-30) },
     billingHistory: []
   };
@@ -262,7 +269,13 @@ function migrateState(s) {
   s.savFields = s.savFields || [];
   s.savTickets.forEach(t => { t.custom = t.custom || {}; });
   const defaultCosts = { 'Étole en lin écru': 14, 'Bougie Cèdre 220g': 6, 'Sac tissé beige': 18, 'Coussin brodé': 12, 'Carnet ligné kraft': 3, 'Savon artisanal': 2.5, 'Vase en grès': 9, 'Plaid en laine': 22 };
-  s.products.forEach(p => { if (p.costPrice == null) p.costPrice = defaultCosts[p.name] ?? 0; });
+  s.catalogFields = s.catalogFields || [];
+  s.products.forEach(p => {
+    if (p.costPrice == null) p.costPrice = defaultCosts[p.name] ?? 0;
+    if (p.salePrice == null) p.salePrice = null;
+    if (p.supplier == null) p.supplier = '';
+    p.custom = p.custom || {};
+  });
   const byChannel = type => s.products.filter(p => p.channels.includes(type));
   s.orders.forEach(o => {
     if (o.productId && s.products.some(p => p.id === o.productId)) return;
@@ -430,15 +443,25 @@ function renderLanding() {
           backdrop-filter: blur(10px);
           border-bottom: 1px solid var(--rule-soft);
         }
-        #landingRoot .l-nav-row { display: flex; align-items: center; justify-content: space-between; padding: 14px 0; }
+        #landingRoot .l-nav-row { display: flex; align-items: center; justify-content: space-between; padding-top: 14px; padding-bottom: 14px; }
         #landingRoot .l-nav-brand { display: flex; align-items: center; gap: 9px; font-weight: 800; font-size: 16px; letter-spacing: -0.02em; }
         #landingRoot .l-nav-brand svg { width: 24px; height: 23px; }
         #landingRoot .l-nav-links { display: flex; align-items: center; gap: 28px; font-size: 13.5px; color: var(--ink-soft); }
         #landingRoot .l-nav-links a:hover { color: var(--ink); }
         #landingRoot .l-nav-right { display: flex; align-items: center; gap: 10px; }
-        #landingRoot .l-nav-cta { font-family: var(--font); font-weight: 650; font-size: 13px; background: var(--ink); color: var(--bg); padding: 9px 16px; border-radius: 7px; white-space: nowrap; border: none; cursor: pointer; }
+        #landingRoot .l-nav-cta { font-family: var(--font); font-weight: 650; font-size: 13px; background: var(--ink); color: var(--bg); padding: 9px 16px; border-radius: 7px; white-space: nowrap; border: none; cursor: pointer; flex-shrink: 0; }
         #landingRoot .l-nav-cta:hover { background: var(--brand); color: #fff; }
+        #landingRoot .l-nav-cta .l-cta-short { display: none; }
+        #landingRoot .wrap.l-nav-row { flex-wrap: nowrap; gap: 10px; }
+        #landingRoot .l-nav-brand span { white-space: nowrap; }
         @media (max-width: 640px) { #landingRoot .l-nav-links { display: none; } }
+        @media (max-width: 480px) {
+          #landingRoot .l-nav-cta .l-cta-full { display: none; }
+          #landingRoot .l-nav-cta .l-cta-short { display: inline; }
+          #landingRoot .l-nav-cta { padding: 8px 12px; font-size: 12.5px; }
+          #landingRoot .l-toggle-label { display: none; }
+          #landingRoot .theme-toggle { padding: 8px; }
+        }
 
         #landingRoot .l-hero { padding: 88px 0 76px; overflow: hidden; }
         #landingRoot .l-hero-inner { position: relative; z-index: 2; max-width: 640px; }
@@ -545,9 +568,9 @@ function renderLanding() {
               ${dark
                 ? `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="8" r="3"/><path d="M8 1v1.6M8 13.4V15M2.6 8H1M15 8h-1.6M3.5 3.5l1.1 1.1M11.4 11.4l1.1 1.1M12.5 3.5l-1.1 1.1M4.6 11.4l-1.1 1.1"/></svg>`
                 : `<svg viewBox="0 0 16 16" fill="currentColor"><path d="M13.5 9.8A5.8 5.8 0 0 1 6.2 2.5a5.8 5.8 0 1 0 7.3 7.3z"/></svg>`}
-              ${dark ? 'Sombre' : 'Clair'}
+              <span class="l-toggle-label">${dark ? 'Sombre' : 'Clair'}</span>
             </button>
-            <button class="l-nav-cta" data-action="authSwitch" data-mode="signup" type="button">Créer un compte / Se connecter</button>
+            <button class="l-nav-cta" data-action="authSwitch" data-mode="signup" type="button"><span class="l-cta-full">Créer un compte / Se connecter</span><span class="l-cta-short">Connexion</span></button>
           </div>
         </div>
       </header>
@@ -805,6 +828,7 @@ const ROUTES = [
   { path: '', label: "Vue d'ensemble", icon: 'M2 9h3v5H2zM6.5 5h3v9h-3zM11 2h3v12h-3z' },
   { path: 'ventes', label: 'Ventes', icon: null },
   { path: 'stock', label: 'Stock', icon: null },
+  { path: 'catalogue', label: 'Mon catalogue', icon: null },
   { path: 'sav', label: 'SAV', icon: null },
   { path: 'connecteurs', label: 'Connecteurs', icon: null },
   { path: 'facturation', label: 'Facturation', icon: null },
@@ -1153,6 +1177,146 @@ function pageStock() {
   `;
 }
 
+/* ---------- page: mon catalogue ---------- */
+const CATALOG_TARGET_FIELDS = [
+  { key: 'name', label: 'Nom du produit', required: true },
+  { key: 'costPrice', label: "Prix d'achat" },
+  { key: 'salePrice', label: 'Prix de revente' },
+  { key: 'supplier', label: 'Fournisseur' },
+  { key: 'stock', label: 'Stock' },
+  { key: 'threshold', label: "Seuil d'alerte" },
+];
+function pageCatalogue() {
+  const missingCost = state.products.filter(p => !p.costPrice).length;
+  return `
+    <div class="topbar">
+      <div><h1>Mon catalogue</h1><div class="sub">${fmtNum(state.products.length)} produit${state.products.length !== 1 ? 's' : ''}${missingCost ? ` · ${missingCost} sans prix d'achat` : ''}</div></div>
+      <div class="topbar-actions">
+        <button class="btn" data-action="openImportCatalog">Importer un CSV</button>
+        <button class="btn" data-action="openAddCatalogField">+ Colonne</button>
+        <button class="btn primary" data-action="openAddProduct">+ Ajouter un produit</button>
+        ${themeToggleHTML()}
+      </div>
+    </div>
+    <div class="card">
+      ${state.products.length ? `<div class="table-scroll"><table class="data">
+        <thead><tr>
+          <th>Produit</th><th>Fournisseur</th><th>Prix d'achat</th><th>Prix de revente</th><th>Marge</th>
+          ${state.catalogFields.map(f => `<th>${escapeHTML(f.label)}<span class="field-remove" data-action="removeCatalogField" data-id="${f.id}" title="Retirer cette colonne">×</span></th>`).join('')}
+        </tr></thead>
+        <tbody>
+          ${state.products.map(p => {
+            const hasMargin = p.salePrice != null && p.costPrice != null;
+            const margin = hasMargin ? p.salePrice - p.costPrice : null;
+            const marginPct = hasMargin && p.salePrice ? (margin / p.salePrice * 100) : null;
+            return `
+            <tr>
+              <td>${escapeHTML(p.name)}</td>
+              <td><input class="stock-input" type="text" value="${escapeHTML(p.supplier || '')}" data-supplier-id="${p.id}" placeholder="—"></td>
+              <td class="amount"><input class="stock-input" type="number" min="0" step="0.01" value="${p.costPrice ?? 0}" data-cost-id="${p.id}"></td>
+              <td class="amount"><input class="stock-input" type="number" min="0" step="0.01" value="${p.salePrice ?? ''}" data-sale-price-id="${p.id}" placeholder="—"></td>
+              <td class="amount">${hasMargin ? `${fmtEUR(margin)}<span style="color:var(--ink-faint); font-size:11.5px;"> (${marginPct.toFixed(0)}%)</span>` : '<span style="color:var(--ink-faint)">—</span>'}</td>
+              ${state.catalogFields.map(f => `<td><input class="stock-input" type="text" value="${escapeHTML(p.custom[f.id] || '')}" data-catalog-custom-id="${p.id}" data-field-id="${f.id}"></td>`).join('')}
+            </tr>`;
+          }).join('')}
+        </tbody>
+      </table></div>` : `<div class="empty">Aucun produit — ajoutez-le manuellement ou importez un fichier CSV.</div>`}
+      <div class="card-sub" style="margin-top:10px;">Le prix d'achat alimente le calcul de marge dans Comptabilité. Ajoutez vos propres colonnes (référence, poids, couleur…) ou importez un fichier CSV pour remplir tout le catalogue d'un coup.</div>
+    </div>
+  `;
+}
+
+function csvParse(text) {
+  if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
+  const sample = text.slice(0, 2000);
+  const delim = (sample.match(/;/g) || []).length > (sample.match(/,/g) || []).length ? ';' : ',';
+  const rows = [];
+  let row = [], field = '', inQuotes = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (inQuotes) {
+      if (c === '"') { if (text[i + 1] === '"') { field += '"'; i++; } else inQuotes = false; }
+      else field += c;
+    } else if (c === '"') inQuotes = true;
+    else if (c === delim) { row.push(field); field = ''; }
+    else if (c === '\n' || c === '\r') {
+      if (c === '\r' && text[i + 1] === '\n') i++;
+      row.push(field); field = '';
+      if (row.length > 1 || row[0] !== '') rows.push(row);
+      row = [];
+    } else field += c;
+  }
+  if (field !== '' || row.length) { row.push(field); rows.push(row); }
+  if (!rows.length) return { headers: [], rows: [] };
+  return { headers: rows[0].map(h => h.trim()), rows: rows.slice(1).filter(r => r.some(c => c.trim() !== '')) };
+}
+
+function guessCatalogMapping(header) {
+  const norm = header.trim().toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+  if (/(^|\W)(nom|produit|article|name|title|designation)(\W|$)/.test(norm)) return 'name';
+  if (/(prix.*achat|cout.*achat|^cout$|^cost$|\bpa\b)/.test(norm)) return 'costPrice';
+  if (/(prix.*vente|prix.*revente|\bpv\b|sale.*price|selling.*price)/.test(norm)) return 'salePrice';
+  if (/(fournisseur|supplier|vendor)/.test(norm)) return 'supplier';
+  if (/(seuil|threshold|alerte)/.test(norm)) return 'threshold';
+  if (/(stock|quantite|qty|quantity)/.test(norm)) return 'stock';
+  return null;
+}
+
+let pendingCatalogImport = null;
+
+function openImportCatalogModal() {
+  openModal(`
+    <h3>Importer un catalogue</h3>
+    <div class="modal-sub">Fichier CSV — si vous avez un Excel, enregistrez-le d'abord au format .csv (Fichier → Enregistrer sous → CSV).</div>
+    <div class="field"><input type="file" id="catalogCsvFile" accept=".csv,text/csv"></div>
+    <div class="actions"><button class="btn" data-action="closeModal">Annuler</button></div>
+  `);
+  document.getElementById('catalogCsvFile').addEventListener('change', async e => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const text = await file.text();
+    const parsed = csvParse(text);
+    if (!parsed.headers.length || !parsed.rows.length) { toast('Fichier CSV vide ou illisible.', true); return; }
+    pendingCatalogImport = parsed;
+    openCatalogMappingModal(parsed);
+  });
+}
+
+function openCatalogMappingModal(parsed) {
+  const { headers, rows } = parsed;
+  const guesses = headers.map(guessCatalogMapping);
+  openModal(`
+    <h3>Faire correspondre les colonnes</h3>
+    <div class="modal-sub">${fmtNum(rows.length)} ligne${rows.length !== 1 ? 's' : ''} détectée${rows.length !== 1 ? 's' : ''}. Un produit déjà présent (même nom) sera mis à jour ; sinon il sera créé.</div>
+    <div style="max-height:360px; overflow-y:auto; margin-bottom:14px;">
+      ${headers.map((h, i) => `
+        <div class="field" style="display:flex; align-items:flex-end; gap:10px; margin-bottom:12px;">
+          <div style="flex:1; min-width:0;">
+            <label style="margin-bottom:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${escapeHTML(h)}</label>
+            <div style="font-size:11.5px; color:var(--ink-faint); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">Ex. « ${escapeHTML(rows[0][i] ?? '')} »</div>
+          </div>
+          <select data-map-col="${i}" style="flex:1;">
+            <option value="">Ignorer cette colonne</option>
+            ${CATALOG_TARGET_FIELDS.map(f => `<option value="field:${f.key}" ${guesses[i] === f.key ? 'selected' : ''}>${f.label}${f.required ? ' (requis)' : ''}</option>`).join('')}
+            ${state.catalogFields.map(f => `<option value="custom:${f.id}">${escapeHTML(f.label)} (colonne existante)</option>`).join('')}
+            <option value="new" ${guesses[i] === null ? 'selected' : ''}>+ Nouvelle colonne « ${escapeHTML(h)} »</option>
+          </select>
+        </div>
+      `).join('')}
+    </div>
+    <div class="actions"><button class="btn" data-action="closeModal">Annuler</button><button class="btn primary" data-action="submitCatalogImport">Importer ${fmtNum(rows.length)} produit${rows.length !== 1 ? 's' : ''}</button></div>
+  `);
+}
+
+function openAddCatalogFieldModal() {
+  openModal(`
+    <h3>Ajouter une colonne</h3>
+    <div class="modal-sub">Ex. Référence fournisseur, Poids, Couleur…</div>
+    <div class="field"><label>Nom de la colonne</label><input type="text" id="catalogFieldLabel" placeholder="Ex. Référence fournisseur"></div>
+    <div class="actions"><button class="btn" data-action="closeModal">Annuler</button><button class="btn primary" data-action="submitAddCatalogField">Ajouter</button></div>
+  `);
+}
+
 /* ---------- page: sav ---------- */
 function savTableHead() {
   return `<tr>
@@ -1428,7 +1592,7 @@ function render() {
   renderNav();
   const main = document.getElementById('main');
   const path = currentPath();
-  const pages = { '': pageOverview, 'ventes': pageVentes, 'stock': pageStock, 'sav': pageSAV, 'connecteurs': pageConnecteurs, 'facturation': pageFacturation, 'comptabilite': pageComptabilite, 'parametres': pageParametres };
+  const pages = { '': pageOverview, 'ventes': pageVentes, 'stock': pageStock, 'catalogue': pageCatalogue, 'sav': pageSAV, 'connecteurs': pageConnecteurs, 'facturation': pageFacturation, 'comptabilite': pageComptabilite, 'parametres': pageParametres };
   main.innerHTML = (pages[path] || pageOverview)();
   if (path === '') {
     const days = Number(state.range);
@@ -1697,8 +1861,85 @@ document.addEventListener('click', e => {
     const threshold = Number(document.getElementById('pThreshold').value) || 0;
     const costPrice = Math.max(0, Number(document.getElementById('pCost').value) || 0);
     const channel = document.getElementById('pChannel').value;
-    state.products.unshift({ id: uid(), name, stock, threshold, costPrice, channels: [channel] });
+    state.products.unshift({ id: uid(), name, stock, threshold, costPrice, salePrice: null, supplier: '', custom: {}, channels: channel ? [channel] : [] });
     persist(); closeModal(); render(); toast(`« ${name} » ajouté au suivi de stock.`);
+    return;
+  }
+
+  if (action === 'openImportCatalog') return openImportCatalogModal();
+  if (action === 'submitCatalogImport') {
+    if (!pendingCatalogImport) return;
+    const { headers, rows } = pendingCatalogImport;
+    const mapping = {};
+    document.querySelectorAll('[data-map-col]').forEach(sel => {
+      const idx = Number(sel.dataset.mapCol);
+      const val = sel.value;
+      if (!val) return;
+      if (val.startsWith('field:')) mapping[idx] = { type: 'field', key: val.slice(6) };
+      else if (val.startsWith('custom:')) mapping[idx] = { type: 'custom', id: val.slice(7) };
+      else if (val === 'new') mapping[idx] = { type: 'new', label: headers[idx] };
+    });
+    const nameEntry = Object.entries(mapping).find(([, m]) => m.type === 'field' && m.key === 'name');
+    if (!nameEntry) return toast('Associez au moins une colonne au « Nom du produit ».', true);
+    const nameIdx = Number(nameEntry[0]);
+
+    const newFieldIds = {};
+    Object.entries(mapping).forEach(([idx, m]) => {
+      if (m.type === 'new') {
+        const fid = uid();
+        state.catalogFields.push({ id: fid, label: m.label });
+        newFieldIds[idx] = fid;
+      }
+    });
+
+    let created = 0, updated = 0;
+    rows.forEach(row => {
+      const name = (row[nameIdx] || '').trim();
+      if (!name) return;
+      let p = state.products.find(p => p.name.trim().toLowerCase() === name.toLowerCase());
+      if (!p) {
+        p = { id: uid(), name, stock: 0, threshold: 10, costPrice: 0, salePrice: null, supplier: '', custom: {}, channels: [] };
+        state.products.push(p);
+        created++;
+      } else updated++;
+      Object.entries(mapping).forEach(([idx, m]) => {
+        const raw = (row[idx] || '').trim();
+        if (m.type === 'field') {
+          if (m.key === 'name' || !raw) return;
+          if (['costPrice', 'salePrice', 'stock', 'threshold'].includes(m.key)) {
+            const num = parseFloat(raw.replace(',', '.').replace(/[^\d.\-]/g, ''));
+            if (!isNaN(num)) p[m.key] = num;
+          } else {
+            p[m.key] = raw;
+          }
+        } else if (m.type === 'custom' && raw) {
+          p.custom[m.id] = raw;
+        } else if (m.type === 'new' && raw) {
+          p.custom[newFieldIds[idx]] = raw;
+        }
+      });
+    });
+
+    pendingCatalogImport = null;
+    persist(); closeModal(); render();
+    toast(`Import terminé : ${created} produit${created !== 1 ? 's' : ''} créé${created !== 1 ? 's' : ''}, ${updated} mis à jour.`);
+    return;
+  }
+
+  if (action === 'openAddCatalogField') return openAddCatalogFieldModal();
+  if (action === 'submitAddCatalogField') {
+    const label = document.getElementById('catalogFieldLabel').value.trim();
+    if (!label) return toast('Le nom de la colonne est requis.', true);
+    state.catalogFields.push({ id: uid(), label });
+    persist(); closeModal(); render();
+    toast(`Colonne « ${label} » ajoutée.`);
+    return;
+  }
+  if (action === 'removeCatalogField') {
+    const fieldId = el.dataset.id;
+    state.catalogFields = state.catalogFields.filter(f => f.id !== fieldId);
+    state.products.forEach(p => { delete p.custom[fieldId]; });
+    persist(); render();
     return;
   }
 
@@ -1871,6 +2112,18 @@ document.addEventListener('input', e => {
   if (e.target.matches('[data-cost-id]')) {
     const p = state.products.find(p => p.id === e.target.dataset.costId);
     if (p) { p.costPrice = Math.max(0, Number(e.target.value) || 0); persist(); }
+  }
+  if (e.target.matches('[data-supplier-id]')) {
+    const p = state.products.find(p => p.id === e.target.dataset.supplierId);
+    if (p) { p.supplier = e.target.value; persist(); }
+  }
+  if (e.target.matches('[data-sale-price-id]')) {
+    const p = state.products.find(p => p.id === e.target.dataset.salePriceId);
+    if (p) { p.salePrice = e.target.value === '' ? null : Math.max(0, Number(e.target.value) || 0); persist(); }
+  }
+  if (e.target.matches('[data-catalog-custom-id]')) {
+    const p = state.products.find(p => p.id === e.target.dataset.catalogCustomId);
+    if (p) { p.custom[e.target.dataset.fieldId] = e.target.value; persist(); }
   }
   if (e.target.id === 'salesSearch') { salesFilter.q = e.target.value; renderKeepFocus('salesSearch'); }
 });
