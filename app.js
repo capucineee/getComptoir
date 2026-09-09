@@ -1631,10 +1631,17 @@ function render() {
 
 /* ---------- actions ---------- */
 function openAddProductModal() {
+  // The catalog is already kept in sync with sales history (every product seen in an
+  // order lands here automatically) — so it's already "the list of unique products from
+  // history." Offered as suggestions so a product already tracked gets picked instead of
+  // retyped (and risk a near-duplicate spelling that would fragment its stock).
+  const suggestions = state.products.map(p => p.name).sort((a, b) => a.localeCompare(b, 'fr'));
   openModal(`
     <h3>Ajouter un produit</h3>
-    <div class="modal-sub">Il apparaîtra dans le suivi de stock.</div>
-    <div class="field"><label>Nom du produit</label><input type="text" id="pName" placeholder="Ex. Écharpe en laine"></div>
+    <div class="modal-sub">Il apparaîtra dans le suivi de stock. ${suggestions.length ? 'Sélectionnez un produit déjà vu dans vos ventes, ou tapez un nouveau nom.' : ''}</div>
+    <div class="field"><label>Nom du produit</label><input type="text" id="pName" list="pNameHistory" placeholder="Ex. Écharpe en laine">
+      <datalist id="pNameHistory">${suggestions.map(n => `<option value="${escapeHTML(n)}">`).join('')}</datalist>
+    </div>
     <div class="row2">
       <div class="field"><label>Stock initial</label><input type="number" id="pStock" min="0" value="20"></div>
       <div class="field"><label>Seuil d'alerte</label><input type="number" id="pThreshold" min="0" value="10"></div>
@@ -1886,6 +1893,12 @@ document.addEventListener('click', e => {
   if (action === 'submitAddProduct') {
     const name = document.getElementById('pName').value.trim();
     if (!name) return toast('Le nom du produit est requis.', true);
+    const existing = state.products.find(p => p.name.trim().toLowerCase() === name.toLowerCase());
+    if (existing) {
+      closeModal();
+      toast(`« ${existing.name} » existe déjà dans votre catalogue — pas de doublon créé.`, true);
+      return;
+    }
     const stock = Number(document.getElementById('pStock').value) || 0;
     const threshold = Number(document.getElementById('pThreshold').value) || 0;
     const costPrice = Math.max(0, Number(document.getElementById('pCost').value) || 0);
