@@ -762,9 +762,12 @@ function renderAuth(mode) {
           <div class="field"><label>Adresse email</label><input type="email" id="authEmail" placeholder="vous@boutique.fr" required></div>
           <div class="field"><label>Mot de passe</label><input type="password" id="authPassword" placeholder="••••••••" required minlength="8"></div>
           ${isSignup ? `<div class="field"><label>Confirmer le mot de passe</label><input type="password" id="authPassword2" placeholder="••••••••" required minlength="8"></div>` : ''}
+          ${isSignup ? `<label style="display:flex; align-items:flex-start; gap:8px; font-size:12.5px; color:var(--ink-soft); margin:2px 0 14px; cursor:pointer;">
+            <input type="checkbox" id="authAcceptTerms" required style="margin-top:2px; flex-shrink:0;">
+            <span>J'accepte les <a href="/conditions-generales.html" target="_blank" style="color:var(--ink-soft); text-decoration:underline;">conditions générales d'utilisation</a> et la <a href="/politique-confidentialite.html" target="_blank" style="color:var(--ink-soft); text-decoration:underline;">politique de confidentialité</a>.</span>
+          </label>` : ''}
           <button type="submit" class="btn primary" id="authSubmitBtn">${isSignup ? 'Créer mon compte' : 'Se connecter'}</button>
         </form>
-        ${isSignup ? `<div style="font-size:12px; color:var(--ink-faint); margin-top:12px; text-align:center;">En créant un compte, vous acceptez notre <a href="/politique-confidentialite.html" target="_blank" style="color:var(--ink-faint); text-decoration:underline;">politique de confidentialité</a>.</div>` : ''}
         <div class="auth-switch">
           ${isSignup
             ? `Déjà un compte ? <button type="button" data-action="authSwitch" data-mode="login">Se connecter</button>`
@@ -785,10 +788,15 @@ function renderAuth(mode) {
       errBox.innerHTML = '<div class="auth-error">Les mots de passe ne correspondent pas.</div>';
       return;
     }
+    if (isSignup && !document.getElementById('authAcceptTerms').checked) {
+      errBox.innerHTML = '<div class="auth-error">Merci d\'accepter les conditions générales et la politique de confidentialité.</div>';
+      return;
+    }
     submitBtn.disabled = true;
     submitBtn.textContent = isSignup ? 'Création…' : 'Connexion…';
     try {
-      const data = await apiRequest(isSignup ? '/api/signup' : '/api/login', { method: 'POST', body: { email, password } });
+      const body = isSignup ? { email, password, acceptTerms: true } : { email, password };
+      const data = await apiRequest(isSignup ? '/api/signup' : '/api/login', { method: 'POST', body });
       setSession(data.token, data.email);
       renderTransition(boot);
     } catch (err) {

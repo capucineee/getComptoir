@@ -35,6 +35,11 @@ DB_PATH = os.environ.get("COMPTOIR_DB_PATH") or os.path.join(ROOT, "comptoir.db"
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 PBKDF2_ITERATIONS = 100_000
 SESSION_TTL_DAYS = 30
+# The version accepted at signup is decided HERE, not sent by the client — trusting a
+# client-supplied version would let anyone claim they accepted a version they never actually
+# saw. Bump this string (matches the "Dernière mise à jour" date on the legal pages) whenever
+# the terms/privacy policy change materially.
+CONSENT_VERSION = "2026-09-09"
 
 
 def get_db():
@@ -72,6 +77,15 @@ def init_db():
             created_at TEXT NOT NULL DEFAULT (datetime('now'))
         );
     """)
+    # Migration: existing deployments already have a `users` table from before consent
+    # tracking existed — CREATE TABLE IF NOT EXISTS above leaves it untouched, so the new
+    # columns are added explicitly, once, guarded by a check rather than a bare ALTER TABLE
+    # (which would error every startup on a column that already exists).
+    existing_cols = {row["name"] for row in conn.execute("PRAGMA table_info(users)")}
+    if "consent_version" not in existing_cols:
+        conn.execute("ALTER TABLE users ADD COLUMN consent_version TEXT")
+    if "consent_accepted_at" not in existing_cols:
+        conn.execute("ALTER TABLE users ADD COLUMN consent_accepted_at TEXT")
     conn.commit()
     conn.close()
 
@@ -114,7 +128,7 @@ def user_from_token(token: str):
         return None
     conn = get_db()
     row = conn.execute(
-        """SELECT u.id, u.email FROM sessions s
+        """SELECT u.id, u.email, u.consent_version, u.consent_accepted_at FROM sessions s
            JOIN users u ON u.id = s.user_id
            WHERE s.token = ? AND s.created_at >= datetime('now', ?)""",
         (token, f"-{SESSION_TTL_DAYS} days"),
@@ -131,6 +145,8 @@ def handle_signup(body):
         raise ApiError(400, "Adresse email invalide.")
     if len(password) < 8:
         raise ApiError(400, "Le mot de passe doit contenir au moins 8 caractères.")
+    if not body.get("acceptTerms"):
+        raise ApiError(400, "Vous devez accepter les conditions générales et la politique de confidentialité pour créer un compte.")
 
     conn = get_db()
     existing = conn.execute("SELECT id FROM users WHERE email = ?", (email,)).fetchone()
@@ -140,9 +156,12 @@ def handle_signup(body):
 
     user_id = secrets.token_hex(12)
     pw_hash, pw_salt = hash_password(password)
+    # Consent is recorded server-side, tied to the account, timestamped and versioned — this
+    # is what makes it a real audit trail (Art. 7 RGPD: the controller must be able to
+    # demonstrate consent was given), not just a checkbox the client could silently skip.
     conn.execute(
-        "INSERT INTO users (id, email, password_hash, password_salt) VALUES (?, ?, ?, ?)",
-        (user_id, email, pw_hash, pw_salt),
+        "INSERT INTO users (id, email, password_hash, password_salt, consent_version, consent_accepted_at) VALUES (?, ?, ?, ?, ?, datetime('now'))",
+        (user_id, email, pw_hash, pw_salt, CONSENT_VERSION),
     )
     conn.commit()
     conn.close()

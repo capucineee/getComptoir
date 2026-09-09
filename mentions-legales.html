@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mentions légales — Comptoir</title>
+<link rel="stylesheet" href="styles.css">
+<style>
+  body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--font); line-height: 1.6; }
+  .topbar {
+    position: sticky; top: 0; z-index: 10; display: flex; align-items: center; gap: 10px;
+    padding: 14px 24px; background: var(--surface); border-bottom: 1px solid var(--rule-soft);
+  }
+  .topbar svg { width: 24px; height: 24px; flex-shrink: 0; }
+  .topbar .name { font-weight: 700; font-size: 15px; }
+  .topbar .tag { color: var(--ink-faint); font-size: 13px; margin-left: 2px; }
+  .topbar .back { margin-left: auto; }
+
+  .wrap { max-width: 720px; margin: 0 auto; padding: 48px 24px 96px; }
+  .eyebrow {
+    display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 600;
+    letter-spacing: 0.04em; text-transform: uppercase; color: var(--brand); background: var(--brand-soft);
+    padding: 5px 11px; border-radius: 100px; margin-bottom: 18px;
+  }
+  h1 { font-size: 28px; font-weight: 700; margin: 0 0 12px; letter-spacing: -0.01em; }
+  .lede { font-size: 15.5px; color: var(--ink-soft); margin: 0 0 8px; max-width: 62ch; }
+  .updated { font-size: 13px; color: var(--ink-faint); margin: 0 0 36px; }
+
+  h2 { font-size: 19px; margin: 42px 0 4px; letter-spacing: -0.01em; }
+  h2 .n { color: var(--brand); font-weight: 600; margin-right: 8px; font-family: var(--font-mono); font-size: 15px; }
+  p { color: var(--ink-soft); font-size: 14.5px; margin: 0 0 14px; }
+  ul { margin: 0 0 14px; padding-left: 20px; color: var(--ink-soft); font-size: 14.5px; }
+  li { margin-bottom: 6px; }
+  strong { color: var(--ink); }
+  a { color: var(--brand); }
+
+  .callout {
+    display: flex; gap: 12px; background: var(--critical-soft); color: var(--critical);
+    border-radius: 12px; padding: 15px 17px; margin: 22px 0; font-size: 13.5px; line-height: 1.6;
+  }
+  .callout svg { flex-shrink: 0; width: 17px; height: 17px; margin-top: 2px; }
+
+  footer { margin-top: 56px; padding-top: 22px; border-top: 1px solid var(--rule-soft); color: var(--ink-faint); font-size: 13px; }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <svg viewBox="50 50 500 470" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+    <path d="M445 92C386 34 302 0 208 0C93 0 0 93 0 208s93 208 208 208c94 0 178-34 237-92l-65-65c-43 40-102 63-172 63-63 0-114-51-114-114S145 94 208 94c70 0 129 23 172 63z" fill="var(--brand)" transform="translate(75 75)"/>
+    <path d="M16 264c31 91 106 152 192 152 71 0 135-27 184-73l-66-65c-31 28-72 44-118 44-44 0-82-24-100-58-17-31-14-56-14-56-21 14-51 37-78 56z" fill="var(--brand-bright)" transform="translate(75 75)"/>
+  </svg>
+  <span class="name">Comptoir</span>
+  <span class="tag">— Mentions légales</span>
+  <a class="back" href="/" style="color:var(--ink-soft); font-size:13px; text-decoration:none;">← Retour à l'app</a>
+</div>
+
+<div class="wrap">
+  <span class="eyebrow">Informations légales</span>
+  <h1>Mentions légales</h1>
+  <p class="lede">Informations relatives à l'éditeur et à l'hébergeur du site Comptoir, conformément à la loi n° 2004-575 du 21 juin 2004 pour la confiance dans l'économie numérique.</p>
+  <p class="updated">Dernière mise à jour : 9 septembre 2026</p>
+
+  <div class="callout">
+    <svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1zm.75 3.5v4.25h-1.5V4.5h1.5zm0 5.75v1.5h-1.5v-1.5h1.5z"/></svg>
+    <div>Les champs ci-dessous marqués <strong>[à compléter]</strong> nécessitent l'identité légale exacte de l'entreprise — je ne peux pas les inventer. À remplir avant toute mise en avant publique du site.</div>
+  </div>
+
+  <h2><span class="n">1</span>Éditeur du site</h2>
+  <p>
+    Le site Comptoir (getcomptoir.fr) est édité par <strong>[Raison sociale à compléter]</strong>, <strong>[forme juridique à compléter]</strong>[, au capital de [montant à compléter] €], immatriculée au <strong>[RCS de … à compléter]</strong> sous le numéro <strong>[SIREN/SIRET à compléter]</strong>, dont le siège social est situé <strong>[adresse à compléter]</strong>.
+  </p>
+  <p>Numéro de TVA intracommunautaire : <strong>[à compléter, le cas échéant]</strong>.</p>
+  <p>Directeur·rice de la publication : <strong>[nom à compléter]</strong>.</p>
+  <p>Contact : <a href="mailto:contact@getcomptoir.fr">contact@getcomptoir.fr</a></p>
+
+  <h2><span class="n">2</span>Hébergement</h2>
+  <p>Le site et l'application sont hébergés par :</p>
+  <p><strong>Railway Corporation</strong><br>
+  <span style="color:var(--ink-faint); font-size:13.5px;">The Railway Corporation, 251 Little Falls Drive, Wilmington, Delaware 19808, États-Unis — <a href="https://railway.com" target="_blank" rel="noopener">railway.com</a></span></p>
+
+  <h2><span class="n">3</span>Propriété intellectuelle</h2>
+  <p>L'ensemble des éléments du site Comptoir (textes, logo, interface, code) est protégé au titre du droit d'auteur. Toute reproduction non autorisée est interdite.</p>
+
+  <h2><span class="n">4</span>Données personnelles</h2>
+  <p>Le traitement des données personnelles est décrit dans notre <a href="/politique-confidentialite.html">politique de confidentialité</a>.</p>
+
+  <h2><span class="n">5</span>Droit applicable</h2>
+  <p>Les présentes mentions légales sont soumises au droit français.</p>
+
+  <footer>
+    Comptoir — <a href="mailto:contact@getcomptoir.fr">contact@getcomptoir.fr</a>
+  </footer>
+</div>
+</body>
+</html>
