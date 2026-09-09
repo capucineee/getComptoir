@@ -1230,9 +1230,9 @@ function pageCatalogue() {
         </tr></thead>
         <tbody>
           ${shown.map(p => {
-            const hasMargin = p.salePrice != null && p.costPrice != null;
+            const hasMargin = p.salePrice != null && p.salePrice > 0 && p.costPrice != null;
             const margin = hasMargin ? p.salePrice - p.costPrice : null;
-            const marginPct = hasMargin && p.salePrice ? (margin / p.salePrice * 100) : null;
+            const marginPct = hasMargin ? (margin / p.salePrice * 100) : null;
             const stats = productSalesStats(p.id);
             return `
             <tr>
