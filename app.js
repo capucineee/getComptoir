@@ -1063,17 +1063,21 @@ function sparkline(points, color) {
 // Classic "nice numbers" axis algorithm (Heckbert): picks a round step (1/2/5 × 10^n) so
 // every tick is a clean number — 0/500/1000/1500 — instead of dividing the max into thirds,
 // which produces ugly fractions like 333/667 for any max that isn't itself a multiple of 3.
-function niceNum(x, round) {
+// Nearest-fit round step (1/2/2.5/5/10 × 10^n). The wider 1/2/5/10 set used earlier could
+// jump straight from a step of 2 to a step of 5 for a max just past the cutoff, ceiling the
+// axis up to 40-50% above the real peak — the 2.5 in between keeps that padding closer to
+// 10-20%, so the plotted line still fills most of the chart height instead of hugging the
+// bottom third of it.
+function niceNum(x) {
   if (!isFinite(x) || x <= 0) return 1;
   const exp = Math.floor(Math.log10(x));
   const f = x / Math.pow(10, exp);
-  const nf = round ? (f < 1.5 ? 1 : f < 3 ? 2 : f < 7 ? 5 : 10) : (f <= 1 ? 1 : f <= 2 ? 2 : f <= 5 ? 5 : 10);
+  const nf = f < 1.5 ? 1 : f < 2.25 ? 2 : f < 3.54 ? 2.5 : f < 7.07 ? 5 : 10;
   return nf * Math.pow(10, exp);
 }
 function niceAxis(dataMax, targetTicks, minStep) {
   const safeMax = (!isFinite(dataMax) || dataMax <= 0) ? 1 : dataMax;
-  const range = niceNum(safeMax, false);
-  let step = niceNum(range / Math.max(1, targetTicks - 1), true);
+  let step = niceNum(safeMax / Math.max(1, targetTicks - 1));
   if (minStep) step = Math.max(step, minStep);
   const max = Math.ceil(safeMax / step) * step;
   const ticks = [];
