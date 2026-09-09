@@ -1698,6 +1698,15 @@ function pageSAV() {
 /* ---------- page: connecteurs ---------- */
 const AVAILABLE_TYPES = ['shopify', 'etsy', 'instagram', 'woocommerce', 'tiktok'];
 const CUSTOM_CONNECTOR_GUIDE_URL = '/guide-connecteur.html';
+// The real signal for "is this connector actually receiving data" — c.lastSync is only ever
+// touched by the manual 'Resynchroniser' button (a client-side timestamp bump, no real fetch
+// happens) or connector setup, so it doesn't reflect real ingest activity. The date of the
+// most recent order actually received on that channel is the honest, verifiable one.
+function lastOrderDate(channelType) {
+  const orders = state.orders.filter(o => o.channelType === channelType);
+  if (!orders.length) return null;
+  return orders.reduce((latest, o) => new Date(o.date) > new Date(latest.date) ? o : latest).date;
+}
 function pageConnecteurs() {
   const connected = state.connectors;
   const notConnected = AVAILABLE_TYPES.filter(t => !connected.some(c => c.type === t));
@@ -1713,19 +1722,22 @@ function pageConnecteurs() {
 
     <h2 style="font-size:14px; margin:0 0 12px;">Connectées</h2>
     <div class="conn-grid">
-      ${connected.map(c => `
+      ${connected.map(c => {
+        const lastOrder = lastOrderDate(c.type);
+        return `
         <div class="conn-card">
           <div class="head">
             <div class="ico" style="background:${channelColor(c.type)}">${CHANNEL_META[c.type]?.initials ?? '?'}</div>
             <div><div class="name">${c.label}</div><div class="meta">Connecté le ${fmtDate(c.connectedAt)}</div></div>
           </div>
-          <div class="meta">Dernière synchro : ${fmtDateTime(c.lastSync)}</div>
+          <div class="meta">Dernière commande reçue : ${lastOrder ? fmtDateTime(lastOrder) : 'Aucune pour l\'instant'}</div>
           ${c.apiKey ? `<div class="api-box"><div class="line"><span>${c.apiKey.slice(0, 22)}…</span><span><span class="copy" data-action="copyKey" data-key="${c.apiKey}">Copier</span> · <span class="copy" data-action="openGuide" title="Guide d'intégration">ⓘ</span></span></div></div>` : ''}
           <div class="actions">
             <button class="btn sm" data-action="resync" data-id="${c.id}">Resynchroniser</button>
             <button class="btn sm danger" data-action="disconnect" data-id="${c.id}">Déconnecter</button>
           </div>
-        </div>`).join('')}
+        </div>`;
+      }).join('')}
     </div>
 
     ${notConnected.length ? `<h2 style="font-size:14px; margin:0 0 12px;">Disponibles</h2>
