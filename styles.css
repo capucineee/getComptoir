@@ -172,6 +172,7 @@ main { flex: 1; padding: 26px 32px 60px; max-width: 1220px; }
 .btn.danger { color: var(--critical); }
 .btn:disabled { opacity: 0.5; cursor: not-allowed; }
 .btn.sm { padding: 5px 10px; font-size: 12px; }
+.btn.icon { width: 34px; height: 34px; padding: 0; justify-content: center; border-radius: 50%; font-style: italic; font-family: Georgia, serif; font-weight: 700; }
 
 .kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 20px; }
 @media (max-width: 900px) { .kpis { grid-template-columns: repeat(2, 1fr); } }

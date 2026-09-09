@@ -220,6 +220,26 @@ function seedData() {
   };
 }
 
+// A real account starts with nothing fabricated — no fake orders, customers or
+// pre-connected platforms. seedData() (above) is demo-only content, kept for local/dev
+// exploration; every real signup gets this instead (see boot()).
+function emptyState() {
+  return {
+    theme: null,
+    accent: 'teal',
+    range: '30',
+    connectors: [],
+    products: [],
+    orders: [],
+    customers: [],
+    customFields: [],
+    savFields: [],
+    savTickets: [],
+    plan: { tier: 'decouverte', renewsAt: isoDaysAgo(-30) },
+    billingHistory: []
+  };
+}
+
 /* ---------- store ----------
  * Source of truth is the server (GET/PUT /api/state, one JSON document per
  * account — see server.py). localStorage is kept only as an instant local
@@ -253,7 +273,7 @@ function migrateState(s) {
   return s;
 }
 // Placeholder so nothing crashes before boot() resolves the real (server) state.
-let state = migrateState(loadLocalCache() || seedData());
+let state = migrateState(loadLocalCache() || emptyState());
 let persistTimer = null;
 function persist() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
@@ -452,8 +472,8 @@ async function boot() {
     if (stateRes.data) {
       state = migrateState(JSON.parse(stateRes.data));
     } else {
-      // Brand-new account: seed a fresh demo dataset and persist it server-side right away.
-      state = migrateState(seedData());
+      // Brand-new account: start with nothing fabricated, persisted server-side right away.
+      state = migrateState(emptyState());
       await apiRequest('/api/state', { method: 'PUT', token: session.token, body: { data: JSON.stringify(state) } });
     }
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
@@ -667,7 +687,7 @@ function pageOverview() {
 
   return `
     <div class="topbar">
-      <div><h1>Vue d'ensemble</h1><div class="sub">Léa — Boutique Belle Maison</div></div>
+      <div><h1>Vue d'ensemble</h1><div class="sub">Aperçu de votre activité multicanale</div></div>
       <div class="topbar-actions">
         <div class="range">
           ${['7', '30', '90'].map(d => `<button data-action="setRange" data-range="${d}" class="${state.range === d ? 'active' : ''}">${d} j</button>`).join('')}
@@ -885,13 +905,18 @@ function pageSAV() {
 
 /* ---------- page: connecteurs ---------- */
 const AVAILABLE_TYPES = ['shopify', 'etsy', 'instagram', 'woocommerce', 'tiktok'];
+const CUSTOM_CONNECTOR_GUIDE_URL = 'https://claude.ai/code/artifact/685c39ff-bfc8-44e5-ae70-d5d5dc24ba45';
 function pageConnecteurs() {
   const connected = state.connectors;
   const notConnected = AVAILABLE_TYPES.filter(t => !connected.some(c => c.type === t));
   return `
     <div class="topbar">
       <div><h1>Connecteurs</h1><div class="sub">${connected.length} plateforme${connected.length !== 1 ? 's' : ''} connectée${connected.length !== 1 ? 's' : ''}</div></div>
-      <div class="topbar-actions"><button class="btn primary" data-action="openAddCustom">+ Connecteur personnalisé</button>${themeToggleHTML()}</div>
+      <div class="topbar-actions">
+        <button class="btn primary" data-action="openAddCustom">+ Connecteur personnalisé</button>
+        <button class="btn icon" data-action="openGuide" title="Guide d'intégration du connecteur personnalisé" aria-label="Guide d'intégration">i</button>
+        ${themeToggleHTML()}
+      </div>
     </div>
 
     <h2 style="font-size:14px; margin:0 0 12px;">Connectées</h2>
@@ -903,7 +928,7 @@ function pageConnecteurs() {
             <div><div class="name">${c.label}</div><div class="meta">Connecté le ${fmtDate(c.connectedAt)}</div></div>
           </div>
           <div class="meta">Dernière synchro : ${fmtDateTime(c.lastSync)}</div>
-          ${c.apiKey ? `<div class="api-box"><div class="line"><span>${c.apiKey.slice(0, 22)}…</span><span class="copy" data-action="copyKey" data-key="${c.apiKey}">Copier</span></div></div>` : ''}
+          ${c.apiKey ? `<div class="api-box"><div class="line"><span>${c.apiKey.slice(0, 22)}…</span><span><span class="copy" data-action="copyKey" data-key="${c.apiKey}">Copier</span> · <span class="copy" data-action="openGuide" title="Guide d'intégration">ⓘ</span></span></div></div>` : ''}
           <div class="actions">
             <button class="btn sm" data-action="resync" data-id="${c.id}">Resynchroniser</button>
             <button class="btn sm danger" data-action="disconnect" data-id="${c.id}">Déconnecter</button>
@@ -1139,7 +1164,7 @@ function openAddProductModal() {
 function openAddCustomModal() {
   openModal(`
     <h3>Connecteur personnalisé</h3>
-    <div class="modal-sub">Pour une plateforme maison — génère une clé API à transmettre à votre développeur.</div>
+    <div class="modal-sub">Pour une plateforme maison — génère une clé API à transmettre à votre développeur. <span class="copy" data-action="openGuide" title="Guide d'intégration">Guide complet ⓘ</span></div>
     <div class="field"><label>Nom de la plateforme</label><input type="text" id="cName" placeholder="Ex. Boutique WordPress"></div>
     <div class="actions"><button class="btn" data-action="closeModal">Annuler</button><button class="btn primary" data-action="submitAddCustom">Générer la clé</button></div>
   `);
@@ -1397,7 +1422,7 @@ document.addEventListener('click', e => {
         const curlExample = `curl -X POST ${endpoint} \\\n  -H "Authorization: Bearer ${apiKey}" \\\n  -H "Content-Type: application/json" \\\n  -d '{"externalId":"CMD-1234","amount":42.90,"status":"livree","customerName":"Jeanne Dupont","productName":"Étole en lin écru"}'`;
         document.getElementById('modalBody').innerHTML = `
           <h3>${escapeHTML(name)} connecté</h3>
-          <div class="modal-sub">Transmettez ces informations à votre développeur — chaque nouvelle commande sur ${escapeHTML(name)} doit déclencher cet appel.</div>
+          <div class="modal-sub">Transmettez ces informations à votre développeur — chaque nouvelle commande sur ${escapeHTML(name)} doit déclencher cet appel. <span class="copy" data-action="openGuide" title="Guide d'intégration">Guide complet ⓘ</span></div>
           <div class="api-box">
             <div class="line"><span>Clé API</span><span class="copy" data-action="copyKey" data-key="${apiKey}">Copier</span></div>
             <div style="word-break:break-all; margin-bottom:8px;">${apiKey}</div>
@@ -1416,6 +1441,10 @@ document.addEventListener('click', e => {
         submitBtn.textContent = 'Générer la clé';
         toast(err.message, true);
       });
+    return;
+  }
+  if (action === 'openGuide') {
+    window.open(CUSTOM_CONNECTOR_GUIDE_URL, '_blank', 'noopener');
     return;
   }
   if (action === 'copyKey') {

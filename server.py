@@ -317,6 +317,37 @@ def _normalize_status(raw):
     return "preparation", f"Statut « {raw} » non reconnu — mis en « preparation » par défaut."
 
 
+def _truthy(value):
+    return value not in (None, "", False, 0, "0", "false", "no", "non")
+
+
+def _infer_status_from_signals(body):
+    """Many real order payloads don't carry a clean 'status' field at all — they carry
+    booleans or timestamps instead (Shopify-style fulfillment_status/cancelled_at, a
+    payment webhook's refunded flag...). When no status field is present, infer one from
+    whichever of these common signals shows up, cancellation/refund taking priority since
+    a shipped-then-cancelled order is a 'retour', not a 'livree'."""
+    cancel_keys = ["cancelled", "canceled", "is_cancelled", "is_canceled", "cancelled_at", "canceled_at",
+                   "refunded", "is_refunded", "refunded_at", "refund_amount", "refundAmount"]
+    if any(_truthy(_pick_field(body, [k])) for k in cancel_keys):
+        return "retour"
+
+    financial_status = _pick_field(body, ["financial_status", "financialStatus"])
+    if financial_status and str(financial_status).strip().lower() in {"refunded", "partially_refunded", "voided"}:
+        return "retour"
+
+    ship_keys = ["delivered", "is_delivered", "delivered_at", "deliveredAt", "shipped", "is_shipped",
+                 "shipped_at", "shippedAt", "fulfilled", "is_fulfilled", "fulfilled_at", "fulfilledAt"]
+    if any(_truthy(_pick_field(body, [k])) for k in ship_keys):
+        return "livree"
+
+    fulfillment_status = _pick_field(body, ["fulfillment_status", "fulfillmentStatus"])
+    if fulfillment_status and str(fulfillment_status).strip().lower() in {"fulfilled", "shipped", "delivered"}:
+        return "livree"
+
+    return None
+
+
 def _parse_amount(raw):
     if raw is None:
         return None
@@ -359,7 +390,12 @@ def handle_ingest_order(api_key, body):
         conn.close()
         raise ApiError(400, "Le montant ne peut pas être négatif.")
 
-    status, status_note = _normalize_status(_pick_field(body, FIELD_ALIASES["status"]))
+    status_raw = _pick_field(body, FIELD_ALIASES["status"])
+    if status_raw not in (None, ""):
+        status, status_note = _normalize_status(status_raw)
+    else:
+        inferred = _infer_status_from_signals(body)
+        status, status_note = (inferred, None) if inferred else ("preparation", None)
 
     external_id_raw = _pick_field(body, FIELD_ALIASES["externalId"])
     external_id = str(external_id_raw).strip() if external_id_raw not in (None, "") else None
