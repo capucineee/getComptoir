@@ -215,6 +215,8 @@ main { flex: 1; padding: 26px 32px 60px; max-width: 1220px; }
 .status-chip.warning { background: var(--warning-soft); color: var(--warning); }
 .status-chip.critical { background: var(--critical-soft); color: var(--critical); }
 .status-chip .dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.suggest-chip { display: inline-block; margin-top: 4px; font-family: var(--font-mono); font-size: 10.5px; padding: 2px 8px; border-radius: 20px; white-space: nowrap; background: var(--brand-soft); color: var(--brand); cursor: pointer; }
+.suggest-chip:hover { filter: brightness(1.08); }
 
 table.data { width: 100%; border-collapse: collapse; margin-top: 4px; }
 table.data th { text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--ink-faint); font-weight: 500; padding: 8px 10px; border-bottom: 1px solid var(--rule); white-space: nowrap; }

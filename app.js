@@ -1060,13 +1060,25 @@ function sparkline(points, color) {
 }
 // "Nice" round ceiling above v (1/2/5 × 10^n) — so the y-axis reads 0/50/100/150 instead
 // of the raw data max, matching how the gridlines are labeled.
-function niceMax(v) {
-  if (!isFinite(v) || v <= 0) return 1;
-  const exp = Math.floor(Math.log10(v));
-  const base = Math.pow(10, exp);
-  const frac = v / base;
-  const niceFrac = frac <= 1 ? 1 : frac <= 2 ? 2 : frac <= 5 ? 5 : 10;
-  return niceFrac * base;
+// Classic "nice numbers" axis algorithm (Heckbert): picks a round step (1/2/5 × 10^n) so
+// every tick is a clean number — 0/500/1000/1500 — instead of dividing the max into thirds,
+// which produces ugly fractions like 333/667 for any max that isn't itself a multiple of 3.
+function niceNum(x, round) {
+  if (!isFinite(x) || x <= 0) return 1;
+  const exp = Math.floor(Math.log10(x));
+  const f = x / Math.pow(10, exp);
+  const nf = round ? (f < 1.5 ? 1 : f < 3 ? 2 : f < 7 ? 5 : 10) : (f <= 1 ? 1 : f <= 2 ? 2 : f <= 5 ? 5 : 10);
+  return nf * Math.pow(10, exp);
+}
+function niceAxis(dataMax, targetTicks, minStep) {
+  const safeMax = (!isFinite(dataMax) || dataMax <= 0) ? 1 : dataMax;
+  const range = niceNum(safeMax, false);
+  let step = niceNum(range / Math.max(1, targetTicks - 1), true);
+  if (minStep) step = Math.max(step, minStep);
+  const max = Math.ceil(safeMax / step) * step;
+  const ticks = [];
+  for (let v = 0; v <= max + step * 1e-6 && ticks.length < 10; v += step) ticks.push(Math.round(v * 1000) / 1000);
+  return { max, ticks };
 }
 function pickTickIndices(n, maxTicks) {
   if (n <= 1) return [0];
@@ -1077,7 +1089,8 @@ function pickTickIndices(n, maxTicks) {
 }
 function trendChartSVG(series, granularity, idPrefix, valueKey) {
   const values = series.map(p => p[valueKey]);
-  const niceMaxV = niceMax(Math.max(...values, 0));
+  const minStep = valueKey === 'count' ? 1 : undefined;
+  const { max: niceMaxV, ticks: tickValues } = niceAxis(Math.max(...values, 0), 4, minStep);
   const w = 640, h = 220, marginL = 46, totalW = w + marginL;
   const plotTop = 14, plotBottom = 190;
   const coords = series.map((p, i) => {
@@ -1087,7 +1100,7 @@ function trendChartSVG(series, granularity, idPrefix, valueKey) {
   });
   const line = coords.map(c => `${c.x},${c.y}`).join(' ');
   const area = `0,${plotBottom} ${line} ${w},${plotBottom}`;
-  const yTicks = [0, 1 / 3, 2 / 3, 1].map(f => ({ y: plotBottom - f * (plotBottom - plotTop), v: f * niceMaxV }));
+  const yTicks = tickValues.map(v => ({ y: plotBottom - (v / niceMaxV) * (plotBottom - plotTop), v }));
   const xTickIdx = pickTickIndices(coords.length, 6);
   const formatY = valueKey === 'ca' ? (v => fmtEUR(Math.round(v))) : (v => fmtNum(Math.round(v)));
   return { coords, svg: `
@@ -1482,7 +1495,7 @@ function pageCatalogue() {
               <td class="amount"><input class="stock-input" type="number" min="0" step="0.01" value="${p.costPrice ?? 0}" data-cost-id="${p.id}"></td>
               <td class="amount">
                 <input class="stock-input" type="number" min="0" step="0.01" value="${p.salePrice ?? ''}" data-sale-price-id="${p.id}" placeholder="—">
-                ${p.salePrice == null && stats.lastSaleHT != null ? `<div style="font-size:11px; color:var(--ink-faint); margin-top:3px; white-space:nowrap;">Dernière vente : ${fmtEUR(stats.lastSaleTTC)} TTC (${fmtEUR(stats.lastSaleHT)} HT) — <span class="copy" data-action="useSuggestedSalePrice" data-id="${p.id}" data-price="${stats.lastSaleHT}">utiliser</span></div>` : ''}
+                ${p.salePrice == null && stats.lastSaleHT != null ? `<div class="suggest-chip" data-action="useSuggestedSalePrice" data-id="${p.id}" data-price="${stats.lastSaleHT}" title="Dernière vente réelle : ${fmtEUR(stats.lastSaleTTC)} TTC">Sugg. ${fmtEUR(stats.lastSaleHT)}</div>` : ''}
               </td>
               <td class="amount">${hasMargin ? `${fmtEUR(margin)}<span style="color:var(--ink-faint); font-size:11.5px;"> (${marginPct.toFixed(0)}%)</span>` : '<span style="color:var(--ink-faint)">—</span>'}</td>
               <td class="amount">${fmtNum(stats.count)}${stats.returns ? `<span style="color:var(--critical); font-size:11.5px;"> (${stats.returns} retour${stats.returns !== 1 ? 's' : ''})</span>` : ''}</td>
