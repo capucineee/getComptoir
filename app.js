@@ -1869,6 +1869,11 @@ function pageComptabilite() {
   const timeline = computeChargesTimeline();
   const timelineRows = chargesTimelineGranularity === 'year' ? timeline.years : timeline.months;
   const timelineMax = Math.max(...timelineRows.map(([, v]) => v), 1);
+  // The detailed Charges list below shows every charge DEFINITION regardless of the page's
+  // range selector — a recurring charge or an old one-off charge shouldn't disappear from the
+  // list just because it falls outside the currently selected 7j/30j/custom window. The range
+  // still governs the period-scoped totals (a.expensesTotal, Bénéfice net) via expensesInRange.
+  const allExpenses = [...state.expenses].sort((a, b) => new Date(b.date) - new Date(a.date));
   return `
     <div class="topbar">
       <div><h1>Comptabilité</h1><div class="sub">Résumé simplifié — ne remplace pas votre comptable</div></div>
@@ -1917,13 +1922,13 @@ function pageComptabilite() {
 
     <div class="card" style="margin-bottom:14px;">
       <div class="card-head">
-        <div><h2>Charges</h2><div class="card-sub">Vos frais fixes ou ponctuels (abonnements, pub, emballages, livraison…) sur la période</div></div>
+        <div><h2>Charges</h2><div class="card-sub">Tout votre historique — abonnements, pub, emballages, livraison…</div></div>
         <button class="btn" data-action="openAddExpense">+ Ajouter une charge</button>
       </div>
-      ${a.expenses.length ? `<div class="table-scroll"><table class="data">
-        <thead><tr><th>Charge</th><th>Date</th><th style="text-align:right">Montant</th><th></th></tr></thead>
+      ${allExpenses.length ? `<div class="table-scroll"><table class="data">
+        <thead><tr><th>Charge</th><th>Date${allExpenses.some(e => e.recurrence !== 'none') ? ' de première échéance' : ''}</th><th style="text-align:right">Montant</th><th></th></tr></thead>
         <tbody>
-          ${a.expenses.map(e => `
+          ${allExpenses.map(e => `
             <tr>
               <td>${escapeHTML(e.label)}${e.recurrence && e.recurrence !== 'none' ? `<span class="suggest-chip" style="cursor:default; margin-top:0; margin-left:8px;" title="Charge récurrente">↻ ${RECURRENCE_LABELS[e.recurrence]}</span>` : ''}</td>
               <td>${fmtDate(e.date)}</td>
@@ -1932,7 +1937,7 @@ function pageComptabilite() {
             </tr>`).join('')}
         </tbody>
       </table></div>
-      <div class="card-sub" style="margin-top:10px;">Total : ${fmtEUR(a.expensesTotal)} sur ${fmtNum(a.expenses.length)} charge${a.expenses.length !== 1 ? 's' : ''}</div>` : `<div class="empty">Aucune charge enregistrée sur cette période.</div>`}
+      <div class="card-sub" style="margin-top:10px;">${fmtNum(allExpenses.length)} charge${allExpenses.length !== 1 ? 's' : ''} enregistrée${allExpenses.length !== 1 ? 's' : ''} — les totaux par période sont dans « Bénéfice net » et « Charges totales par période » ci-dessous.</div>` : `<div class="empty">Aucune charge enregistrée pour l'instant.</div>`}
     </div>
 
     <div class="card" style="margin-bottom:14px;">
