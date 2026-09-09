@@ -220,9 +220,9 @@ function seedData() {
     savTickets,
     catalogFields: [],
     expenses: [
-      { id: uid(), label: 'Abonnement Shopify', amount: 29, date: isoDaysAgo(12) },
-      { id: uid(), label: 'Publicité Instagram', amount: 85, date: isoDaysAgo(9) },
-      { id: uid(), label: 'Emballages', amount: 42, date: isoDaysAgo(20) }
+      { id: uid(), label: 'Abonnement Shopify', amount: 29, date: isoDaysAgo(12), recurrence: 'monthly' },
+      { id: uid(), label: 'Publicité Instagram', amount: 85, date: isoDaysAgo(9), recurrence: 'none' },
+      { id: uid(), label: 'Emballages', amount: 42, date: isoDaysAgo(20), recurrence: 'none' }
     ],
     plan: { tier: 'multicanal', renewsAt: isoDaysAgo(-14) },
     billingHistory: [
@@ -294,7 +294,7 @@ function migrateState(s) {
   const defaultCosts = { 'Étole en lin écru': 14, 'Bougie Cèdre 220g': 6, 'Sac tissé beige': 18, 'Coussin brodé': 12, 'Carnet ligné kraft': 3, 'Savon artisanal': 2.5, 'Vase en grès': 9, 'Plaid en laine': 22 };
   s.catalogFields = s.catalogFields || [];
   s.expenses = s.expenses || [];
-  s.expenses.forEach(e => { e.label = e.label || ''; e.amount = Number(e.amount) || 0; e.date = e.date || new Date().toISOString(); });
+  s.expenses.forEach(e => { e.label = e.label || ''; e.amount = Number(e.amount) || 0; e.date = e.date || new Date().toISOString(); e.recurrence = e.recurrence || 'none'; });
   s.products.forEach(p => {
     if (p.costPrice == null) p.costPrice = defaultCosts[p.name] ?? 0;
     if (p.salePrice == null) p.salePrice = null;
@@ -981,9 +981,36 @@ function channelBreakdown(bounds) {
 }
 const VAT_RATE = 0.20;
 function orderProduct(o) { return state.products.find(p => p.id === o.productId) || null; }
+const RECURRENCE_LABELS = { weekly: 'Hebdomadaire', monthly: 'Mensuelle', yearly: 'Annuelle' };
+// A recurring charge (subscription, rent…) is stored once, anchored at its first date — this
+// expands it into one virtual occurrence per period up to `upTo`, so a 29€/mois abonnement
+// genuinely counts ~3 times over a 90-day range instead of once. Occurrences share the parent
+// expense's id: removing it removes the whole series, not a single month (see removeExpense).
+function expenseOccurrences(e, upTo) {
+  if (!e.recurrence || e.recurrence === 'none') return [new Date(e.date)];
+  const occurrences = [];
+  let d = new Date(e.date);
+  let guard = 0;
+  while (d.getTime() <= upTo.getTime() && guard < 600) {
+    occurrences.push(new Date(d));
+    if (e.recurrence === 'weekly') d = new Date(d.getFullYear(), d.getMonth(), d.getDate() + 7, d.getHours(), d.getMinutes());
+    else if (e.recurrence === 'monthly') d = new Date(d.getFullYear(), d.getMonth() + 1, d.getDate(), d.getHours(), d.getMinutes());
+    else if (e.recurrence === 'yearly') d = new Date(d.getFullYear() + 1, d.getMonth(), d.getDate(), d.getHours(), d.getMinutes());
+    else break;
+    guard++;
+  }
+  return occurrences;
+}
 function expensesInRange(bounds) {
   const from = bounds.from.getTime(), to = bounds.to.getTime();
-  return state.expenses.filter(e => { const t = new Date(e.date).getTime(); return t >= from && t <= to; }).sort((a, b) => new Date(b.date) - new Date(a.date));
+  const rows = [];
+  state.expenses.forEach(e => {
+    expenseOccurrences(e, bounds.to).forEach(d => {
+      const t = d.getTime();
+      if (t >= from && t <= to) rows.push({ ...e, date: d.toISOString() });
+    });
+  });
+  return rows.sort((a, b) => new Date(b.date) - new Date(a.date));
 }
 function computeAccounting(bounds) {
   const cur = ordersInRange(bounds).filter(o => o.status !== 'retour');
@@ -1650,7 +1677,16 @@ function openAddExpenseModal() {
     <div class="modal-sub">Ex. Abonnement Shopify, Publicité Instagram, Emballages…</div>
     <div class="field"><label>Intitulé</label><input type="text" id="expenseLabel" placeholder="Ex. Abonnement Shopify"></div>
     <div class="field"><label>Montant (€)</label><input type="number" id="expenseAmount" min="0" step="0.01" value="0"></div>
-    <div class="field"><label>Date</label><input type="date" id="expenseDate" value="${todayISO}" max="${todayISO}"></div>
+    <div class="field"><label>Date (première échéance si récurrente)</label><input type="date" id="expenseDate" value="${todayISO}" max="${todayISO}"></div>
+    <div class="field">
+      <label>Récurrence</label>
+      <select id="expenseRecurrence">
+        <option value="none">Ponctuelle</option>
+        <option value="weekly">Hebdomadaire</option>
+        <option value="monthly">Mensuelle</option>
+        <option value="yearly">Annuelle</option>
+      </select>
+    </div>
     <div class="actions"><button class="btn" data-action="closeModal">Annuler</button><button class="btn primary" data-action="submitAddExpense">Ajouter</button></div>
   `, () => document.getElementById('expenseLabel')?.focus());
 }
@@ -1867,10 +1903,10 @@ function pageComptabilite() {
         <tbody>
           ${a.expenses.map(e => `
             <tr>
-              <td>${escapeHTML(e.label)}</td>
+              <td>${escapeHTML(e.label)}${e.recurrence && e.recurrence !== 'none' ? `<span class="suggest-chip" style="cursor:default; margin-top:0; margin-left:8px;" title="Charge récurrente">↻ ${RECURRENCE_LABELS[e.recurrence]}</span>` : ''}</td>
               <td>${fmtDate(e.date)}</td>
               <td class="amount">${fmtEUR(e.amount)}</td>
-              <td><span class="field-remove" data-action="removeExpense" data-id="${e.id}" title="Supprimer cette charge">×</span></td>
+              <td><span class="field-remove" data-action="removeExpense" data-id="${e.id}" title="${e.recurrence && e.recurrence !== 'none' ? 'Supprimer cette charge récurrente (toutes les échéances)' : 'Supprimer cette charge'}">×</span></td>
             </tr>`).join('')}
         </tbody>
       </table></div>
@@ -2399,11 +2435,12 @@ document.addEventListener('click', e => {
     const label = document.getElementById('expenseLabel').value.trim();
     const amount = Math.max(0, Number(document.getElementById('expenseAmount').value) || 0);
     const dateInput = document.getElementById('expenseDate').value;
+    const recurrence = document.getElementById('expenseRecurrence').value;
     if (!label) return toast('L\'intitulé de la charge est requis.', true);
     const date = dateInput ? new Date(dateInput + 'T12:00:00').toISOString() : new Date().toISOString();
-    state.expenses.push({ id: uid(), label, amount, date });
+    state.expenses.push({ id: uid(), label, amount, date, recurrence });
     persist(); closeModal(); render();
-    toast(`Charge « ${label} » ajoutée.`);
+    toast(recurrence === 'none' ? `Charge « ${label} » ajoutée.` : `Charge récurrente « ${label} » ajoutée (${RECURRENCE_LABELS[recurrence].toLowerCase()}).`);
     return;
   }
   if (action === 'removeExpense') {
