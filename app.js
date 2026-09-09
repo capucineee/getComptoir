@@ -1172,20 +1172,19 @@ function pageStock() {
     </div>
     <div class="card">
       <table class="data">
-        <thead><tr><th>Produit</th><th>Canaux</th><th>Seuil</th><th>Stock</th><th>Coût d'achat</th><th>Statut</th></tr></thead>
+        <thead><tr><th>Produit</th><th>Canaux</th><th>Seuil</th><th>Stock</th><th>Statut</th></tr></thead>
         <tbody>
           ${state.products.map(p => `
             <tr>
-              <td>${p.name}</td>
-              <td>${p.channels.map(connectorLabel).join(' + ')}</td>
+              <td>${escapeHTML(p.name)}</td>
+              <td>${p.channels.length ? p.channels.map(connectorLabel).join(' + ') : '<span style="color:var(--ink-faint)">—</span>'}</td>
               <td class="amount">${p.threshold}</td>
               <td class="amount"><input class="stock-input" type="number" min="0" value="${p.stock}" data-stock-id="${p.id}"></td>
-              <td class="amount"><input class="stock-input" type="number" min="0" step="0.01" value="${p.costPrice ?? 0}" data-cost-id="${p.id}"></td>
               <td><span class="status-chip ${alertLevel(p)}"><span class="dot"></span>${alertLevel(p) === 'good' ? 'OK' : alertLevel(p) === 'warning' ? 'Vigilance' : 'Critique'}</span></td>
             </tr>`).join('')}
         </tbody>
       </table>
-      <div class="card-sub" style="margin-top:10px;">Le coût d'achat sert à calculer votre marge dans l'onglet Comptabilité.</div>
+      <div class="card-sub" style="margin-top:10px;">Le prix d'achat et le fournisseur se gèrent dans <a href="#catalogue" style="color:var(--brand)">Mon catalogue</a> — ici, uniquement la quantité en stock.</div>
     </div>
   `;
 }
