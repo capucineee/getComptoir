@@ -219,6 +219,11 @@ function seedData() {
     savFields: [],
     savTickets,
     catalogFields: [],
+    expenses: [
+      { id: uid(), label: 'Abonnement Shopify', amount: 29, date: isoDaysAgo(12) },
+      { id: uid(), label: 'Publicité Instagram', amount: 85, date: isoDaysAgo(9) },
+      { id: uid(), label: 'Emballages', amount: 42, date: isoDaysAgo(20) }
+    ],
     plan: { tier: 'multicanal', renewsAt: isoDaysAgo(-14) },
     billingHistory: [
       { id: uid(), date: isoDaysAgo(16), amount: 19, tier: 'Multicanal' },
@@ -246,6 +251,7 @@ function emptyState() {
     savFields: [],
     savTickets: [],
     catalogFields: [],
+    expenses: [],
     plan: { tier: 'decouverte', renewsAt: isoDaysAgo(-30) },
     billingHistory: []
   };
@@ -287,6 +293,8 @@ function migrateState(s) {
   s.savTickets.forEach(t => { t.custom = t.custom || {}; });
   const defaultCosts = { 'Étole en lin écru': 14, 'Bougie Cèdre 220g': 6, 'Sac tissé beige': 18, 'Coussin brodé': 12, 'Carnet ligné kraft': 3, 'Savon artisanal': 2.5, 'Vase en grès': 9, 'Plaid en laine': 22 };
   s.catalogFields = s.catalogFields || [];
+  s.expenses = s.expenses || [];
+  s.expenses.forEach(e => { e.label = e.label || ''; e.amount = Number(e.amount) || 0; e.date = e.date || new Date().toISOString(); });
   s.products.forEach(p => {
     if (p.costPrice == null) p.costPrice = defaultCosts[p.name] ?? 0;
     if (p.salePrice == null) p.salePrice = null;
@@ -973,6 +981,10 @@ function channelBreakdown(bounds) {
 }
 const VAT_RATE = 0.20;
 function orderProduct(o) { return state.products.find(p => p.id === o.productId) || null; }
+function expensesInRange(bounds) {
+  const from = bounds.from.getTime(), to = bounds.to.getTime();
+  return state.expenses.filter(e => { const t = new Date(e.date).getTime(); return t >= from && t <= to; }).sort((a, b) => new Date(b.date) - new Date(a.date));
+}
 function computeAccounting(bounds) {
   const cur = ordersInRange(bounds).filter(o => o.status !== 'retour');
   const refunded = ordersInRange(bounds).filter(o => o.status === 'retour');
@@ -983,7 +995,14 @@ function computeAccounting(bounds) {
   const margin = ht - cost;
   const marginPct = ht ? (margin / ht) * 100 : 0;
   const refundsTotal = refunded.reduce((s, o) => s + o.amount, 0);
-  return { ttc, ht, tva, cost, margin, marginPct, refundsTotal, refundedCount: refunded.length, orders: [...cur, ...refunded].sort((a, b) => new Date(b.date) - new Date(a.date)) };
+  const expenses = expensesInRange(bounds);
+  const expensesTotal = expenses.reduce((s, e) => s + e.amount, 0);
+  const netProfit = margin - expensesTotal;
+  return {
+    ttc, ht, tva, cost, margin, marginPct, refundsTotal, refundedCount: refunded.length,
+    orders: [...cur, ...refunded].sort((a, b) => new Date(b.date) - new Date(a.date)),
+    expenses, expensesTotal, netProfit
+  };
 }
 const DOW_LABELS = ['Dimanche', 'Lundi', 'Mardi', 'Mercredi', 'Jeudi', 'Vendredi', 'Samedi'];
 const WEEK_POS_LABELS = ['Semaine 1 (1–7)', 'Semaine 2 (8–14)', 'Semaine 3 (15–21)', 'Semaine 4 (22–31)'];
@@ -1619,6 +1638,17 @@ function openAddCatalogFieldModal() {
     <div class="actions"><button class="btn" data-action="closeModal">Annuler</button><button class="btn primary" data-action="submitAddCatalogField">Ajouter</button></div>
   `);
 }
+function openAddExpenseModal() {
+  const todayISO = new Date().toISOString().slice(0, 10);
+  openModal(`
+    <h3>Ajouter une charge</h3>
+    <div class="modal-sub">Ex. Abonnement Shopify, Publicité Instagram, Emballages…</div>
+    <div class="field"><label>Intitulé</label><input type="text" id="expenseLabel" placeholder="Ex. Abonnement Shopify"></div>
+    <div class="field"><label>Montant (€)</label><input type="number" id="expenseAmount" min="0" step="0.01" value="0"></div>
+    <div class="field"><label>Date</label><input type="date" id="expenseDate" value="${todayISO}" max="${todayISO}"></div>
+    <div class="actions"><button class="btn" data-action="closeModal">Annuler</button><button class="btn primary" data-action="submitAddExpense">Ajouter</button></div>
+  `, () => document.getElementById('expenseLabel')?.focus());
+}
 
 /* ---------- page: sav ---------- */
 function savTableHead() {
@@ -1801,6 +1831,37 @@ function pageComptabilite() {
         ${missingCost ? `<div class="callout" style="margin-top:14px;">${missingCost} produit${missingCost !== 1 ? 's' : ''} sans coût d'achat renseigné — la marge les compte à 0 €. <a href="#catalogue" style="color:var(--brand)">Compléter dans Mon catalogue →</a></div>` : ''}
       </div>
       <div class="card">
+        <h2>Bénéfice net</h2>
+        <div class="card-sub">Marge brute moins vos charges sur la période</div>
+        <div style="display:flex; align-items:baseline; gap:14px; margin:10px 0 4px;">
+          <span style="font-family:var(--font-mono); font-size:32px; font-weight:600; font-variant-numeric:tabular-nums; color:${a.netProfit >= 0 ? 'inherit' : 'var(--critical)'};">${fmtEUR(a.netProfit)}</span>
+        </div>
+        <div class="card-sub">${fmtEUR(a.margin)} de marge − ${fmtEUR(a.expensesTotal)} de charges</div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom:14px;">
+      <div class="card-head">
+        <div><h2>Charges</h2><div class="card-sub">Vos frais fixes ou ponctuels (abonnements, pub, emballages, livraison…) sur la période</div></div>
+        <button class="btn" data-action="openAddExpense">+ Ajouter une charge</button>
+      </div>
+      ${a.expenses.length ? `<div class="table-scroll"><table class="data">
+        <thead><tr><th>Charge</th><th>Date</th><th style="text-align:right">Montant</th><th></th></tr></thead>
+        <tbody>
+          ${a.expenses.map(e => `
+            <tr>
+              <td>${escapeHTML(e.label)}</td>
+              <td>${fmtDate(e.date)}</td>
+              <td class="amount">${fmtEUR(e.amount)}</td>
+              <td><span class="field-remove" data-action="removeExpense" data-id="${e.id}" title="Supprimer cette charge">×</span></td>
+            </tr>`).join('')}
+        </tbody>
+      </table></div>
+      <div class="card-sub" style="margin-top:10px;">Total : ${fmtEUR(a.expensesTotal)} sur ${fmtNum(a.expenses.length)} charge${a.expenses.length !== 1 ? 's' : ''}</div>` : `<div class="empty">Aucune charge enregistrée sur cette période.</div>`}
+    </div>
+
+    <div class="grid">
+      <div class="card">
         <h2>Export comptable</h2>
         <div class="card-sub">Un fichier CSV prêt pour votre comptable ou votre logiciel de compta.</div>
         <ul class="plain" style="margin-top:6px;">
@@ -1838,7 +1899,16 @@ function exportAccountingCSV() {
     ];
   });
   const csvEscape = v => /[";\n]/.test(v) ? `"${String(v).replace(/"/g, '""')}"` : v;
-  const csv = [header, ...rows].map(r => r.map(csvEscape).join(';')).join('\r\n');
+  const summaryRows = [
+    [],
+    ['Charges'],
+    ...a.expenses.map(e => [new Date(e.date).toLocaleDateString('fr-FR'), e.label, '', '', '', '', '', '', '', (-e.amount).toFixed(2)]),
+    [],
+    ['', '', '', '', '', '', '', '', 'Marge brute', a.margin.toFixed(2)],
+    ['', '', '', '', '', '', '', '', 'Total charges', (-a.expensesTotal).toFixed(2)],
+    ['', '', '', '', '', '', '', '', 'Bénéfice net', a.netProfit.toFixed(2)]
+  ];
+  const csv = [header, ...rows, ...summaryRows].map(r => r.map(csvEscape).join(';')).join('\r\n');
   const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' });
   const url = URL.createObjectURL(blob);
   const a2 = document.createElement('a');
@@ -2303,6 +2373,24 @@ document.addEventListener('click', e => {
     const fieldId = el.dataset.id;
     state.catalogFields = state.catalogFields.filter(f => f.id !== fieldId);
     state.products.forEach(p => { delete p.custom[fieldId]; });
+    persist(); render();
+    return;
+  }
+
+  if (action === 'openAddExpense') return openAddExpenseModal();
+  if (action === 'submitAddExpense') {
+    const label = document.getElementById('expenseLabel').value.trim();
+    const amount = Math.max(0, Number(document.getElementById('expenseAmount').value) || 0);
+    const dateInput = document.getElementById('expenseDate').value;
+    if (!label) return toast('L\'intitulé de la charge est requis.', true);
+    const date = dateInput ? new Date(dateInput + 'T12:00:00').toISOString() : new Date().toISOString();
+    state.expenses.push({ id: uid(), label, amount, date });
+    persist(); closeModal(); render();
+    toast(`Charge « ${label} » ajoutée.`);
+    return;
+  }
+  if (action === 'removeExpense') {
+    state.expenses = state.expenses.filter(e => e.id !== el.dataset.id);
     persist(); render();
     return;
   }
