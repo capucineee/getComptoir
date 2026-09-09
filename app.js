@@ -739,6 +739,7 @@ function renderLanding() {
           <div class="l-foot-brand">${AUTH_MARK}Comptoir</div>
           <div class="l-foot-links">
             <a href="mailto:contact@getcomptoir.fr">contact@getcomptoir.fr</a>
+            <a href="/politique-confidentialite.html">Politique de confidentialité</a>
             <span>© 2026 Comptoir. Vendez partout. Comptez ici.</span>
           </div>
         </div>
@@ -763,6 +764,7 @@ function renderAuth(mode) {
           ${isSignup ? `<div class="field"><label>Confirmer le mot de passe</label><input type="password" id="authPassword2" placeholder="••••••••" required minlength="8"></div>` : ''}
           <button type="submit" class="btn primary" id="authSubmitBtn">${isSignup ? 'Créer mon compte' : 'Se connecter'}</button>
         </form>
+        ${isSignup ? `<div style="font-size:12px; color:var(--ink-faint); margin-top:12px; text-align:center;">En créant un compte, vous acceptez notre <a href="/politique-confidentialite.html" target="_blank" style="color:var(--ink-faint); text-decoration:underline;">politique de confidentialité</a>.</div>` : ''}
         <div class="auth-switch">
           ${isSignup
             ? `Déjà un compte ? <button type="button" data-action="authSwitch" data-mode="login">Se connecter</button>`

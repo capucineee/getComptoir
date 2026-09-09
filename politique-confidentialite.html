@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Politique de confidentialité — Comptoir</title>
+<link rel="stylesheet" href="styles.css">
+<style>
+  body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--font); line-height: 1.6; }
+  .topbar {
+    position: sticky; top: 0; z-index: 10; display: flex; align-items: center; gap: 10px;
+    padding: 14px 24px; background: var(--surface); border-bottom: 1px solid var(--rule-soft);
+  }
+  .topbar svg { width: 24px; height: 24px; flex-shrink: 0; }
+  .topbar .name { font-weight: 700; font-size: 15px; }
+  .topbar .tag { color: var(--ink-faint); font-size: 13px; margin-left: 2px; }
+  .topbar .back { margin-left: auto; }
+
+  .wrap { max-width: 720px; margin: 0 auto; padding: 48px 24px 96px; }
+  .eyebrow {
+    display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 600;
+    letter-spacing: 0.04em; text-transform: uppercase; color: var(--brand); background: var(--brand-soft);
+    padding: 5px 11px; border-radius: 100px; margin-bottom: 18px;
+  }
+  h1 { font-size: 28px; font-weight: 700; margin: 0 0 12px; letter-spacing: -0.01em; }
+  .lede { font-size: 15.5px; color: var(--ink-soft); margin: 0 0 8px; max-width: 62ch; }
+  .updated { font-size: 13px; color: var(--ink-faint); margin: 0 0 36px; }
+
+  h2 { font-size: 19px; margin: 42px 0 4px; letter-spacing: -0.01em; }
+  h2 .n { color: var(--brand); font-weight: 600; margin-right: 8px; font-family: var(--font-mono); font-size: 15px; }
+  .section-sub { color: var(--ink-faint); font-size: 13.5px; margin: 0 0 16px; }
+  p { color: var(--ink-soft); font-size: 14.5px; margin: 0 0 14px; }
+  ul { margin: 0 0 14px; padding-left: 20px; color: var(--ink-soft); font-size: 14.5px; }
+  li { margin-bottom: 6px; }
+  strong { color: var(--ink); }
+  a { color: var(--brand); }
+
+  .card { background: var(--surface); border: 1px solid var(--rule-soft); border-radius: 14px; padding: 20px 22px; margin: 16px 0; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; margin: 12px 0 8px; }
+  th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--rule-soft); vertical-align: top; }
+  th { font-weight: 600; font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--ink-faint); }
+  .table-wrap { overflow-x: auto; border: 1px solid var(--rule-soft); border-radius: 12px; background: var(--surface); }
+  .table-wrap tr:last-child td { border-bottom: none; }
+
+  .callout {
+    display: flex; gap: 12px; background: var(--warning-soft); color: var(--warning);
+    border-radius: 12px; padding: 15px 17px; margin: 22px 0; font-size: 13.5px; line-height: 1.6;
+  }
+  .callout svg { flex-shrink: 0; width: 17px; height: 17px; margin-top: 2px; }
+  .callout b { color: inherit; }
+  .callout.todo { background: var(--critical-soft); color: var(--critical); }
+
+  .toc { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 0 0 36px; }
+  .toc a { font-size: 13px; color: var(--ink-soft); text-decoration: none; border-bottom: 1px dashed var(--rule); }
+  .toc a:hover { color: var(--brand); border-color: var(--brand); }
+
+  footer { margin-top: 56px; padding-top: 22px; border-top: 1px solid var(--rule-soft); color: var(--ink-faint); font-size: 13px; }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <svg viewBox="50 50 500 470" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+    <path d="M445 92C386 34 302 0 208 0C93 0 0 93 0 208s93 208 208 208c94 0 178-34 237-92l-65-65c-43 40-102 63-172 63-63 0-114-51-114-114S145 94 208 94c70 0 129 23 172 63z" fill="var(--brand)" transform="translate(75 75)"/>
+    <path d="M16 264c31 91 106 152 192 152 71 0 135-27 184-73l-66-65c-31 28-72 44-118 44-44 0-82-24-100-58-17-31-14-56-14-56-21 14-51 37-78 56z" fill="var(--brand-bright)" transform="translate(75 75)"/>
+  </svg>
+  <span class="name">Comptoir</span>
+  <span class="tag">— Politique de confidentialité</span>
+  <a class="back" href="/" style="color:var(--ink-soft); font-size:13px; text-decoration:none;">← Retour à l'app</a>
+</div>
+
+<div class="wrap">
+  <span class="eyebrow">Données personnelles</span>
+  <h1>Politique de confidentialité</h1>
+  <p class="lede">Comment Comptoir collecte, utilise et protège vos données, ainsi que celles de vos client·es lorsque vous utilisez l'application.</p>
+  <p class="updated">Dernière mise à jour : 9 septembre 2026</p>
+
+  <div class="callout todo">
+    <svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1zm.75 3.5v4.25h-1.5V4.5h1.5zm0 5.75v1.5h-1.5v-1.5h1.5z"/></svg>
+    <div><b>À compléter avant publication réelle :</b> la section 1 ci-dessous contient des champs à remplir avec l'identité légale exacte de l'entreprise (raison sociale, forme juridique, adresse, SIREN si applicable). Le reste du contenu décrit fidèlement ce que le code de Comptoir fait aujourd'hui.</div>
+  </div>
+
+  <div class="toc">
+    <a href="#qui">1. Qui sommes-nous</a>
+    <a href="#donnees">2. Données collectées</a>
+    <a href="#base">3. Base légale</a>
+    <a href="#destinataires">4. Qui y a accès</a>
+    <a href="#duree">5. Durée de conservation</a>
+    <a href="#droits">6. Vos droits</a>
+    <a href="#securite">7. Sécurité</a>
+    <a href="#cookies">8. Cookies &amp; stockage local</a>
+    <a href="#transferts">9. Transferts hors UE</a>
+    <a href="#marchandes">10. Si vous êtes marchande</a>
+    <a href="#contact">11. Contact &amp; réclamation</a>
+  </div>
+
+  <h2 id="qui"><span class="n">1</span>Qui sommes-nous</h2>
+  <p>Comptoir est édité par <strong>[Raison sociale à compléter]</strong>, <strong>[forme juridique, ex. entreprise individuelle / SASU / SAS à compléter]</strong>, dont le siège est situé <strong>[adresse à compléter]</strong><span>[, immatriculée sous le numéro SIREN [à compléter] le cas échéant]</span>.</p>
+  <p>Le responsable de traitement pour les données de compte (email, mot de passe) et les données d'usage de l'application est Comptoir. Pour les données relatives à vos propres client·es que vous saisissez ou transmettez via Comptoir, voir la <a href="#marchandes">section 10</a>.</p>
+
+  <h2 id="donnees"><span class="n">2</span>Quelles données nous collectons</h2>
+  <p class="section-sub">Uniquement ce qui est nécessaire au fonctionnement de l'application — aucune collecte publicitaire, aucun profilage.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Donnée</th><th>Quand</th><th>Pourquoi</th></tr></thead>
+      <tbody>
+        <tr><td>Adresse email</td><td>Création de compte</td><td>Identifiant de connexion, contact en cas de besoin</td></tr>
+        <tr><td>Mot de passe</td><td>Création de compte</td><td>Authentification — stocké haché (PBKDF2-SHA256, jamais en clair), jamais consultable par nous</td></tr>
+        <tr><td>Données de vos commandes (montant, statut, nom de client, produit)</td><td>Saisie manuelle ou transmises par votre site via un connecteur</td><td>Fonctionnement du tableau de bord, du suivi de stock et de la comptabilité simplifiée</td></tr>
+        <tr><td>Catalogue produits, charges, fournisseurs</td><td>Saisie manuelle ou import</td><td>Calcul de marge et de bénéfice</td></tr>
+        <tr><td>Clé(s) API de connecteur</td><td>Création d'un connecteur personnalisé</td><td>Authentifier les commandes envoyées par votre site</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>Nous ne collectons ni ne demandons de numéro de carte bancaire, de pièce d'identité, ni de donnée dite « sensible » au sens de l'article 9 du RGPD.</p>
+
+  <h2 id="base"><span class="n">3</span>Base légale du traitement</h2>
+  <ul>
+    <li><strong>Exécution du contrat</strong> — la quasi-totalité des traitements (compte, commandes, catalogue) sont nécessaires à la fourniture du service que vous nous demandez d'exécuter.</li>
+    <li><strong>Intérêt légitime</strong> — sécurité du compte (protection contre les tentatives de connexion abusives), amélioration du service.</li>
+  </ul>
+
+  <h2 id="destinataires"><span class="n">4</span>Qui a accès à vos données</h2>
+  <p>Vos données ne sont ni vendues, ni louées, ni partagées à des fins publicitaires. Elles sont accessibles à :</p>
+  <ul>
+    <li><strong>L'équipe Comptoir</strong>, dans la stricte mesure nécessaire au support technique.</li>
+    <li><strong>Notre hébergeur</strong> (Railway), qui stocke les données sur nos serveurs — voir <a href="#transferts">section 9</a> sur la localisation.</li>
+  </ul>
+  <p>Nous ne faisons appel à aucun autre sous-traitant à ce jour (pas d'outil d'analyse d'audience, pas d'envoi d'email marketing tiers).</p>
+
+  <h2 id="duree"><span class="n">5</span>Durée de conservation</h2>
+  <p>Vos données sont conservées tant que votre compte est actif. <span style="color:var(--critical);">Nous n'avons pas encore mis en place de purge automatique après une période d'inactivité — un compte supprimé n'est aujourd'hui effacé que sur demande manuelle (voir section 6).</span></p>
+
+  <h2 id="droits"><span class="n">6</span>Vos droits</h2>
+  <p>Conformément au RGPD, vous disposez d'un droit d'accès, de rectification, d'effacement, de limitation, de portabilité et d'opposition sur vos données. Vous pouvez éditer vous-même la plupart de vos données directement dans l'application (Paramètres, Mon catalogue, Comptabilité).</p>
+  <p><span style="color:var(--critical);">Il n'existe pas encore de fonctionnalité de suppression de compte en libre-service.</span> Pour exercer un de ces droits, ou demander la suppression complète de votre compte, écrivez-nous — voir <a href="#contact">section 11</a>. Nous répondons dans un délai maximum d'un mois.</p>
+
+  <h2 id="securite"><span class="n">7</span>Sécurité des données</h2>
+  <p>Les mots de passe sont hachés (PBKDF2-HMAC-SHA256, 100 000 itérations, sel unique par compte) — jamais stockés en clair. Les échanges avec l'application sont chiffrés (HTTPS). L'accès à vos données nécessite une session authentifiée par jeton, invalidée après 30 jours d'inactivité.</p>
+
+  <h2 id="cookies"><span class="n">8</span>Cookies et stockage local</h2>
+  <p>Comptoir n'utilise <strong>aucun cookie tiers, aucun traceur publicitaire, aucun outil d'analyse d'audience</strong>. L'application utilise le stockage local de votre navigateur (localStorage) uniquement pour deux choses strictement nécessaires à son fonctionnement : garder votre session connectée, et retenir votre préférence d'affichage (thème clair/sombre). Rien n'est transmis à un tiers via ce stockage.</p>
+
+  <h2 id="transferts"><span class="n">9</span>Transferts hors Union européenne</h2>
+  <p><span style="color:var(--critical);">La région d'hébergement exacte de nos serveurs (via Railway) est en cours de vérification.</span> Si vos données venaient à être hébergées hors de l'Union européenne, nous nous engageons à nous appuyer sur un mécanisme de transfert reconnu par le RGPD (clauses contractuelles types ou équivalent).</p>
+
+  <h2 id="marchandes"><span class="n">10</span>Si vous êtes marchande : vos propres client·es</h2>
+  <p>Si vous utilisez Comptoir pour suivre vos ventes, les noms de vos client·es que vous saisissez ou que votre site transmet via un connecteur sont traités par Comptoir <strong>pour votre compte</strong>. Vous restez responsable de traitement vis-à-vis de vos propres client·es ; Comptoir agit comme sous-traitant au sens de l'article 28 du RGPD.</p>
+  <p><span style="color:var(--critical);">Un contrat de sous-traitance formel n'est pas encore mis en place — il est en préparation.</span> En attendant, nous nous engageons aux mêmes garanties de sécurité et de confidentialité que celles décrites dans ce document pour l'ensemble des données que nous traitons.</p>
+
+  <h2 id="contact"><span class="n">11</span>Contact &amp; réclamation</h2>
+  <p>Pour toute question sur cette politique ou pour exercer vos droits, écrivez à <a href="mailto:contact@getcomptoir.fr">contact@getcomptoir.fr</a>.</p>
+  <p>Si vous estimez que vos droits ne sont pas respectés, vous pouvez introduire une réclamation auprès de la CNIL (<a href="https://www.cnil.fr" target="_blank" rel="noopener">cnil.fr</a>).</p>
+
+  <h2 id="modif"><span class="n">·</span>Modifications de cette politique</h2>
+  <p>Cette politique peut évoluer avec le service. Toute modification substantielle vous sera signalée dans l'application.</p>
+
+  <footer>
+    Comptoir — <a href="mailto:contact@getcomptoir.fr">contact@getcomptoir.fr</a>
+  </footer>
+</div>
+</body>
+</html>
