@@ -111,7 +111,7 @@ const ACCENTS = {
 };
 
 const PLAN_META = {
-  decouverte: { name: 'Découverte', price: 5, channels: 1, orders: 50 },
+  decouverte: { name: 'Découverte', price: 10, channels: 1, orders: 50 },
   multicanal: { name: 'Multicanal', price: 19, channels: 3, orders: 500 },
   croissance: { name: 'Croissance', price: 49, channels: Infinity, orders: 3000 }
 };
