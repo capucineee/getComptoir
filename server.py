@@ -277,6 +277,7 @@ FIELD_ALIASES = {
     "status": ["status", "state", "statut", "orderStatus", "order_status"],
     "customerName": ["customerName", "customer_name", "client", "clientName", "client_name", "nom_client", "buyer", "buyerName", "name"],
     "productName": ["productName", "product_name", "product", "article", "item", "itemName", "item_name", "designation"],
+    "quantity": ["quantity", "qty", "quantite", "quantité", "nombre", "count", "units"],
 }
 STATUS_ALIASES = {
     "livree": {"livree", "delivered", "shipped", "completed", "complete", "fulfilled", "paid", "payee", "done"},
@@ -426,6 +427,14 @@ def handle_ingest_order(api_key, body):
                 product_name = first
     product_name = str(product_name).strip() if product_name not in (None, "") else None
 
+    quantity_raw = _pick_field(body, FIELD_ALIASES["quantity"])
+    if quantity_raw is None and isinstance(body.get("items"), list) and body["items"]:
+        first_item = body["items"][0]
+        if isinstance(first_item, dict):
+            quantity_raw = _pick_field(first_item, FIELD_ALIASES["quantity"])
+    quantity = _parse_amount(quantity_raw)
+    quantity = int(quantity) if quantity and quantity > 0 else 1
+
     with STATE_LOCK:
         state_row = conn.execute("SELECT data FROM app_state WHERE user_id = ?", (user_id,)).fetchone()
         if not state_row:
@@ -466,7 +475,16 @@ def handle_ingest_order(api_key, body):
                 # backfills that — fix the link now instead of just reporting "duplicate".
                 backfilled = False
                 if not existing.get("productId") and product_name:
-                    existing["productId"] = find_or_create_product(product_name)
+                    pid = find_or_create_product(product_name)
+                    existing["productId"] = pid
+                    # This sale was never reflected in stock the first time (no product
+                    # was linked yet) — apply it now, same rule as a fresh order.
+                    product = next((p for p in products if p["id"] == pid), None)
+                    if product is not None:
+                        existing_qty = existing.get("quantity") or 1
+                        current = product.get("stock", 0) or 0
+                        existing_status = existing.get("status")
+                        product["stock"] = current + existing_qty if existing_status == "retour" else max(0, current - existing_qty)
                     backfilled = True
                 if backfilled:
                     new_data = json.dumps(data)
@@ -484,6 +502,13 @@ def handle_ingest_order(api_key, body):
         product_id = None
         if product_name:
             product_id = find_or_create_product(product_name)
+            # Stock stays in sync with sales automatically: a real sale takes units out,
+            # a return puts them back. Never goes negative — a mismatch (oversold before
+            # a restock was recorded) shows up as 0, not a nonsensical negative count.
+            product = next((p for p in products if p["id"] == product_id), None)
+            if product is not None:
+                current = product.get("stock", 0) or 0
+                product["stock"] = current + quantity if status == "retour" else max(0, current - quantity)
 
         next_number = max([o.get("orderNumber", 0) for o in orders], default=1000) + 1
         order = {
@@ -495,6 +520,7 @@ def handle_ingest_order(api_key, body):
             "customer": customer_name,
             "amount": round(amount, 2),
             "status": status,
+            "quantity": quantity,
             "date": date,
             "custom": {},
             "externalId": external_id,

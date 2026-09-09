@@ -1166,7 +1166,6 @@ function pageStock() {
     <div class="topbar">
       <div><h1>Stock</h1><div class="sub">${state.products.length} produits · ${alerts} sous le seuil</div></div>
       <div class="topbar-actions">
-        <button class="btn primary" data-action="openAddProduct">+ Ajouter un produit</button>
         ${themeToggleHTML()}
       </div>
     </div>
@@ -1184,7 +1183,7 @@ function pageStock() {
             </tr>`).join('')}
         </tbody>
       </table>
-      <div class="card-sub" style="margin-top:10px;">Le prix d'achat et le fournisseur se gèrent dans <a href="#catalogue" style="color:var(--brand)">Mon catalogue</a> — ici, uniquement la quantité en stock.</div>
+      <div class="card-sub" style="margin-top:10px;">Le stock se déduit automatiquement à chaque vente reçue (et se recrédite en cas de retour) — modifiez-le ici uniquement pour un réassort ou une correction. Prix d'achat et fournisseur se gèrent dans <a href="#catalogue" style="color:var(--brand)">Mon catalogue</a>.</div>
     </div>
   `;
 }
