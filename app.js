@@ -985,6 +985,55 @@ function computeAccounting(bounds) {
   const refundsTotal = refunded.reduce((s, o) => s + o.amount, 0);
   return { ttc, ht, tva, cost, margin, marginPct, refundsTotal, refundedCount: refunded.length, orders: [...cur, ...refunded].sort((a, b) => new Date(b.date) - new Date(a.date)) };
 }
+const DOW_LABELS = ['Dimanche', 'Lundi', 'Mardi', 'Mercredi', 'Jeudi', 'Vendredi', 'Samedi'];
+const WEEK_POS_LABELS = ['Semaine 1 (1–7)', 'Semaine 2 (8–14)', 'Semaine 3 (15–21)', 'Semaine 4 (22–31)'];
+// Sales-habits indicator: uses the FULL order history (not the Vue d'ensemble range) on
+// purpose — a recurring pattern (best weekday, best week-of-month, best month) only gets
+// more reliable with more history, so narrowing it to a KPI range would work against it.
+function computeSalesHabits() {
+  const sold = state.orders.filter(o => o.status !== 'retour');
+  if (sold.length < 5) return null;
+
+  const dow = Array.from({ length: 7 }, () => ({ count: 0, revenue: 0 }));
+  const weekPos = Array.from({ length: 4 }, () => ({ count: 0, revenue: 0 }));
+  const months = {};
+  let minT = Infinity, maxT = -Infinity;
+
+  sold.forEach(o => {
+    const d = new Date(o.date);
+    const t = d.getTime();
+    if (t < minT) minT = t;
+    if (t > maxT) maxT = t;
+    dow[d.getDay()].count++; dow[d.getDay()].revenue += o.amount;
+    const wp = Math.min(3, Math.floor((d.getDate() - 1) / 7));
+    weekPos[wp].count++; weekPos[wp].revenue += o.amount;
+    const mkey = `${d.getFullYear()}-${d.getMonth()}`;
+    months[mkey] = months[mkey] || { count: 0, revenue: 0, year: d.getFullYear(), month: d.getMonth() };
+    months[mkey].count++; months[mkey].revenue += o.amount;
+  });
+
+  const rank = arr => arr.map((s, i) => ({ i, ...s })).sort((a, b) => b.revenue - a.revenue);
+  const dowRanked = rank(dow);
+  const weekPosRanked = rank(weekPos);
+  const monthRanked = Object.values(months).sort((a, b) => b.revenue - a.revenue);
+  const spanDays = Math.round((maxT - minT) / 86400000);
+  const distinctMonths = Object.keys(months).length;
+
+  const nextOccurrence = targetDow => {
+    const d = new Date(); d.setHours(0, 0, 0, 0); d.setDate(d.getDate() + 1);
+    for (let i = 0; i < 8; i++) { if (d.getDay() === targetDow) return d; d.setDate(d.getDate() + 1); }
+    return null;
+  };
+
+  return {
+    dowRanked, weekPosRanked, monthRanked, spanDays, distinctMonths,
+    totalOrders: sold.length,
+    bestDow: dowRanked[0],
+    bestWeekPos: weekPosRanked[0],
+    nextBestDowDate: nextOccurrence(dowRanked[0].i),
+    sparse: spanDays < 30 || sold.length < 20
+  };
+}
 function stockAlerts() {
   return state.products.filter(p => p.stock <= p.threshold).sort((a, b) => a.stock - b.stock);
 }
@@ -1009,30 +1058,51 @@ function sparkline(points, color) {
     <circle cx="${last[0]}" cy="${last[1]}" r="2.4" fill="${color}"/>
   </svg>`;
 }
+// "Nice" round ceiling above v (1/2/5 × 10^n) — so the y-axis reads 0/50/100/150 instead
+// of the raw data max, matching how the gridlines are labeled.
+function niceMax(v) {
+  if (!isFinite(v) || v <= 0) return 1;
+  const exp = Math.floor(Math.log10(v));
+  const base = Math.pow(10, exp);
+  const frac = v / base;
+  const niceFrac = frac <= 1 ? 1 : frac <= 2 ? 2 : frac <= 5 ? 5 : 10;
+  return niceFrac * base;
+}
+function pickTickIndices(n, maxTicks) {
+  if (n <= 1) return [0];
+  if (n <= maxTicks) return Array.from({ length: n }, (_, i) => i);
+  const idx = [];
+  for (let i = 0; i < maxTicks; i++) idx.push(Math.round(i * (n - 1) / (maxTicks - 1)));
+  return [...new Set(idx)];
+}
 function trendChartSVG(series, granularity, idPrefix, valueKey) {
   const values = series.map(p => p[valueKey]);
-  const max = Math.max(...values, 1), min = Math.min(...values, 0);
-  const w = 640, h = 220;
+  const niceMaxV = niceMax(Math.max(...values, 0));
+  const w = 640, h = 220, marginL = 46, totalW = w + marginL;
+  const plotTop = 14, plotBottom = 190;
   const coords = series.map((p, i) => {
     const x = (i / (series.length - 1 || 1)) * w;
-    const y = 195 - ((p[valueKey] - min) / (max - min || 1)) * 165;
+    const y = plotBottom - (p[valueKey] / niceMaxV) * (plotBottom - plotTop);
     return { x, y, v: p[valueKey], t: p.t };
   });
   const line = coords.map(c => `${c.x},${c.y}`).join(' ');
-  const area = `0,220 ${line} ${w},220`;
+  const area = `0,${plotBottom} ${line} ${w},${plotBottom}`;
+  const yTicks = [0, 1 / 3, 2 / 3, 1].map(f => ({ y: plotBottom - f * (plotBottom - plotTop), v: f * niceMaxV }));
+  const xTickIdx = pickTickIndices(coords.length, 6);
+  const formatY = valueKey === 'ca' ? (v => fmtEUR(Math.round(v))) : (v => fmtNum(Math.round(v)));
   return { coords, svg: `
-    <svg id="${idPrefix}Svg" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">
+    <svg id="${idPrefix}Svg" viewBox="${-marginL} 0 ${totalW} ${h}" preserveAspectRatio="none">
       <defs><linearGradient id="${idPrefix}FillGrad" x1="0" y1="0" x2="0" y2="1">
         <stop offset="0%" stop-color="var(--brand)" stop-opacity="0.22"/>
         <stop offset="100%" stop-color="var(--brand)" stop-opacity="0"/>
       </linearGradient></defs>
-      <line x1="0" y1="55" x2="${w}" y2="55" stroke="var(--rule-soft)" stroke-width="1"/>
-      <line x1="0" y1="110" x2="${w}" y2="110" stroke="var(--rule-soft)" stroke-width="1"/>
-      <line x1="0" y1="165" x2="${w}" y2="165" stroke="var(--rule-soft)" stroke-width="1"/>
+      ${yTicks.map(t => `<line x1="0" y1="${t.y}" x2="${w}" y2="${t.y}" stroke="var(--rule-soft)" stroke-width="1"/>`).join('')}
+      ${yTicks.map(t => `<text x="-8" y="${t.y + 3.5}" text-anchor="end" font-size="10" fill="var(--ink-faint)" font-family="var(--font-mono)">${formatY(t.v)}</text>`).join('')}
+      ${xTickIdx.map(i => `<text x="${coords[i].x}" y="${plotBottom + 15}" text-anchor="${i === 0 ? 'start' : i === coords.length - 1 ? 'end' : 'middle'}" font-size="10" fill="var(--ink-faint)" font-family="var(--font-mono)">${escapeHTML(bucketLabel(coords[i].t, granularity))}</text>`).join('')}
       <polygon fill="url(#${idPrefix}FillGrad)" points="${area}"/>
       <polyline fill="none" stroke="var(--brand)" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round" points="${line}"/>
       <circle id="${idPrefix}HoverDot" r="4" fill="var(--brand)" stroke="var(--surface)" stroke-width="2" style="opacity:0"/>
-      <line id="${idPrefix}HoverLine" x1="0" y1="0" x2="0" y2="${h}" stroke="var(--ink-faint)" stroke-width="1" stroke-dasharray="3,3" style="opacity:0"/>
+      <line id="${idPrefix}HoverLine" x1="0" y1="${plotTop}" x2="0" y2="${plotBottom}" stroke="var(--ink-faint)" stroke-width="1" stroke-dasharray="3,3" style="opacity:0"/>
       <rect id="${idPrefix}HoverCatcher" x="0" y="0" width="${w}" height="${h}" fill="transparent"/>
     </svg>` };
 }
@@ -1044,15 +1114,16 @@ function wireTrendChart(coords, granularity, idPrefix, formatValue) {
   const hoverLine = document.getElementById(`${idPrefix}HoverLine`);
   const tooltip = document.getElementById(`${idPrefix}Tooltip`);
   const wrap = document.getElementById(`${idPrefix}Wrap`);
+  const w = 640, marginL = 46, totalW = w + marginL;
   function nearest(xVal) { let best = coords[0]; for (const c of coords) if (Math.abs(c.x - xVal) < Math.abs(best.x - xVal)) best = c; return best; }
   catcher.addEventListener('mousemove', e => {
     const rect = svg.getBoundingClientRect();
-    const xVal = ((e.clientX - rect.left) / rect.width) * 640;
+    const xVal = -marginL + ((e.clientX - rect.left) / rect.width) * totalW;
     const c = nearest(xVal);
     dot.setAttribute('cx', c.x); dot.setAttribute('cy', c.y); dot.style.opacity = 1;
     hoverLine.setAttribute('x1', c.x); hoverLine.setAttribute('x2', c.x); hoverLine.style.opacity = 1;
     const wrapRect = wrap.getBoundingClientRect();
-    tooltip.style.left = ((c.x / 640) * wrapRect.width) + 'px';
+    tooltip.style.left = (((c.x + marginL) / totalW) * wrapRect.width) + 'px';
     tooltip.style.top = ((c.y / 220) * wrapRect.height) + 'px';
     tooltip.textContent = bucketLabel(c.t, granularity) + ' — ' + formatValue(c.v);
     tooltip.style.opacity = 1;
@@ -1061,6 +1132,38 @@ function wireTrendChart(coords, granularity, idPrefix, formatValue) {
 }
 
 /* ---------- page: overview ---------- */
+function habitBarsHTML(ranked, labelFn) {
+  const byIndex = ranked.slice().sort((a, b) => a.i - b.i);
+  const max = Math.max(...ranked.map(r => r.revenue), 1);
+  const bestRevenue = ranked[0].revenue;
+  return byIndex.map(r => {
+    const pct = Math.round((r.revenue / max) * 100);
+    const isBest = r.revenue === bestRevenue && r.revenue > 0;
+    return `<div class="chan-row">
+      <div class="top"><span>${labelFn(r.i)}</span><span class="pct">${fmtEUR(r.revenue)}</span></div>
+      <div class="chan-bar"><div style="width:${pct}%; background:${isBest ? 'var(--brand)' : 'var(--rule-soft)'}"></div></div>
+    </div>`;
+  }).join('');
+}
+function habitMonthsHTML(monthRanked) {
+  const top = monthRanked.slice(0, 3);
+  const max = Math.max(...top.map(m => m.revenue), 1);
+  return top.map((m, idx) => {
+    const label = new Date(m.year, m.month, 1).toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' });
+    const pct = Math.round((m.revenue / max) * 100);
+    return `<div class="chan-row">
+      <div class="top"><span>${label}${idx === 0 ? ' — meilleur mois' : ''}</span><span class="pct">${fmtEUR(m.revenue)}</span></div>
+      <div class="chan-bar"><div style="width:${pct}%; background:${idx === 0 ? 'var(--brand)' : 'var(--rule-soft)'}"></div></div>
+    </div>`;
+  }).join('');
+}
+function habitsInsightText(h) {
+  const dowName = DOW_LABELS[h.bestDow.i].toLowerCase();
+  const wpName = WEEK_POS_LABELS[h.bestWeekPos.i].toLowerCase();
+  let s = `Vos ventes sont historiquement les plus fortes le ${dowName}, en ${wpName} du mois.`;
+  if (h.nextBestDowDate) s += ` Le prochain ${dowName} est le ${fmtDate(h.nextBestDowDate.toISOString())} — pensez à renforcer votre communication (pub, posts, relances) dans les jours qui précèdent.`;
+  return s;
+}
 function pageOverview() {
   const bounds = getRangeBounds();
   const granularity = state.overviewGranularity;
@@ -1069,6 +1172,7 @@ function pageOverview() {
   const caChart = trendChartSVG(series, granularity, 'ca', 'ca');
   const cntChart = trendChartSVG(series, granularity, 'cnt', 'count');
   const breakdown = channelBreakdown(bounds);
+  const habits = computeSalesHabits();
   const alerts = stockAlerts();
   const recent = state.orders.slice(0, 6);
   const todayISO = new Date().toISOString().slice(0, 10);
@@ -1126,6 +1230,30 @@ function pageOverview() {
       <div class="chart-wrap" id="cntWrap">${cntChart.svg}<div class="tooltip" id="cntTooltip"></div></div>
     </div>
 
+    <div class="card" style="margin-bottom:14px;">
+      <h2>Habitudes de vente</h2>
+      ${habits ? `
+        <div class="card-sub">Basé sur tout votre historique — ${fmtNum(habits.totalOrders)} commande${habits.totalOrders !== 1 ? 's' : ''} sur ${fmtNum(habits.spanDays)} jour${habits.spanDays !== 1 ? 's' : ''}</div>
+        ${habits.sparse ? `<div class="callout" style="margin-top:10px;">Encore peu d'historique — ces tendances se préciseront à mesure que vos ventes s'accumulent.</div>` : ''}
+        <div style="margin-top:10px; background:var(--brand-soft); color:var(--brand); font-size:13px; padding:10px 13px; border-radius:8px; line-height:1.5;">${habitsInsightText(habits)}</div>
+        <div style="display:flex; gap:20px; flex-wrap:wrap; margin-top:14px;">
+          <div style="flex:1; min-width:220px;">
+            <div class="card-sub" style="margin-bottom:8px;">Par jour de la semaine</div>
+            ${habitBarsHTML(habits.dowRanked, i => DOW_LABELS[i])}
+          </div>
+          <div style="flex:1; min-width:220px;">
+            <div class="card-sub" style="margin-bottom:8px;">Par semaine du mois</div>
+            ${habitBarsHTML(habits.weekPosRanked, i => WEEK_POS_LABELS[i])}
+          </div>
+        </div>
+        ${habits.distinctMonths >= 2 ? `
+        <div style="margin-top:14px;">
+          <div class="card-sub" style="margin-bottom:8px;">Meilleurs mois observés</div>
+          ${habitMonthsHTML(habits.monthRanked)}
+        </div>` : ''}
+      ` : `<div class="empty">Pas encore assez de ventes pour dégager des tendances (au moins 5 commandes nécessaires).</div>`}
+    </div>
+
     <div class="grid">
       <div class="card">
         <h2>Commandes récentes</h2>
@@ -1137,12 +1265,13 @@ function pageOverview() {
       </div>
       <div class="card">
         <h2>Alertes stock</h2>
-        <div class="card-sub">Produits sous le seuil</div>
-        ${alerts.length ? alerts.map(p => `
+        <div class="card-sub">${alerts.length ? `${fmtNum(alerts.length)} produit${alerts.length !== 1 ? 's' : ''} sous le seuil — les plus critiques d'abord` : 'Produits sous le seuil'}</div>
+        ${alerts.length ? alerts.slice(0, 6).map(p => `
           <div class="alert-row">
-            <div class="product">${p.name}<span class="chan">${p.channels.map(connectorLabel).join(' + ')}</span></div>
+            <div class="product">${escapeHTML(p.name)}<span class="chan">${p.channels.map(connectorLabel).join(' + ')}</span></div>
             <span class="status-chip ${alertLevel(p)}"><span class="dot"></span>${p.stock} restants</span>
           </div>`).join('') : `<div class="empty">Tous les stocks sont au-dessus du seuil.</div>`}
+        ${alerts.length > 6 ? `<div class="card-sub" style="margin-top:10px;">${fmtNum(alerts.length - 6)} autre${alerts.length - 6 !== 1 ? 's' : ''} produit${alerts.length - 6 !== 1 ? 's' : ''} concerné${alerts.length - 6 !== 1 ? 's' : ''} — <a href="#stock" style="color:var(--brand)">voir tout le stock →</a></div>` : ''}
       </div>
     </div>
   `;
@@ -1270,15 +1399,15 @@ function pageStock() {
 /* ---------- page: mon catalogue ---------- */
 const CATALOG_TARGET_FIELDS = [
   { key: 'name', label: 'Nom du produit', required: true },
-  { key: 'costPrice', label: "Prix d'achat" },
-  { key: 'salePrice', label: 'Prix de revente' },
+  { key: 'costPrice', label: "Prix d'achat (HT)" },
+  { key: 'salePrice', label: 'Prix de revente (HT)' },
   { key: 'supplier', label: 'Fournisseur' },
   { key: 'stock', label: 'Stock' },
   { key: 'threshold', label: "Seuil d'alerte" },
 ];
 let catalogFilterIncomplete = false;
 function exportCatalogCSV() {
-  const header = ['Nom du produit', "Prix d'achat", 'Prix de revente', 'Fournisseur', 'Stock', "Seuil d'alerte", ...state.catalogFields.map(f => f.label)];
+  const header = ['Nom du produit', "Prix d'achat (HT)", 'Prix de revente (HT)', 'Fournisseur', 'Stock', "Seuil d'alerte", ...state.catalogFields.map(f => f.label)];
   const rows = state.products.map(p => [
     p.name,
     p.costPrice != null ? String(p.costPrice) : '',
@@ -1328,7 +1457,7 @@ function pageCatalogue() {
     <div class="card">
       ${shown.length ? `<div class="table-scroll"><table class="data">
         <thead><tr>
-          <th>Produit</th><th>Fournisseur</th><th>Prix d'achat</th><th>Prix de revente</th><th>Marge</th><th>Vendu</th><th>CA généré</th>
+          <th>Produit</th><th>Fournisseur</th><th>Prix d'achat (HT)</th><th>Prix de revente (HT)</th><th>Marge</th><th>Vendu</th><th>CA généré</th>
           ${state.catalogFields.map(f => `<th>${escapeHTML(f.label)}<span class="field-remove" data-action="removeCatalogField" data-id="${f.id}" title="Retirer cette colonne">×</span></th>`).join('')}
         </tr></thead>
         <tbody>
@@ -1351,7 +1480,7 @@ function pageCatalogue() {
           }).join('')}
         </tbody>
       </table></div>` : `<div class="empty">${catalogFilterIncomplete ? 'Tout est déjà complet — aucun produit ne manque de prix d\'achat ou de fournisseur.' : 'Aucun produit — ajoutez-le manuellement, importez un fichier CSV, ou cliquez « Importer du site » si des ventes sont déjà arrivées.'}</div>`}
-      <div class="card-sub" style="margin-top:10px;">Le prix d'achat alimente le calcul de marge dans Comptabilité. « Vendu » et « CA généré » comptent vos commandes déjà reçues (hors retours) pour ce produit. « Importer du site » synchronise depuis les ventes déjà reçues par Comptoir — ce n'est pas une lecture en direct de votre site, seules les commandes déjà transmises via le connecteur y figurent. Ajoutez vos propres colonnes (référence, poids, couleur…) ou importez un fichier CSV pour remplir tout le catalogue d'un coup. Vous pouvez aussi cliquer « Exporter en CSV », compléter les prix dans Excel, puis « Importer un CSV » pour renvoyer le fichier — les produits déjà présents (même nom) seront mis à jour, pas dupliqués.</div>
+      <div class="card-sub" style="margin-top:10px;">Prix d'achat et prix de revente s'entendent hors taxes (HT) — c'est aussi la base utilisée pour le calcul de marge dans Comptabilité. « Vendu » et « CA généré » comptent vos commandes déjà reçues (hors retours) pour ce produit. « Importer du site » synchronise depuis les ventes déjà reçues par Comptoir — ce n'est pas une lecture en direct de votre site, seules les commandes déjà transmises via le connecteur y figurent. Ajoutez vos propres colonnes (référence, poids, couleur…) ou importez un fichier CSV pour remplir tout le catalogue d'un coup. Vous pouvez aussi cliquer « Exporter en CSV », compléter les prix dans Excel, puis « Importer un CSV » pour renvoyer le fichier — les produits déjà présents (même nom) seront mis à jour, pas dupliqués.</div>
     </div>
   `;
 }
@@ -1619,13 +1748,13 @@ function pageComptabilite() {
     <div class="grid">
       <div class="card">
         <h2>Marge brute</h2>
-        <div class="card-sub">Chiffre d'affaires HT moins coût d'achat des produits vendus</div>
+        <div class="card-sub">Chiffre d'affaires HT moins coût d'achat (HT) des produits vendus</div>
         <div style="display:flex; align-items:baseline; gap:14px; margin:10px 0 4px;">
           <span style="font-family:var(--font-mono); font-size:32px; font-weight:600; font-variant-numeric:tabular-nums;">${fmtEUR(a.margin)}</span>
           <span class="status-chip ${a.marginPct >= 40 ? 'good' : a.marginPct >= 20 ? 'warning' : 'critical'}"><span class="dot"></span>${a.marginPct.toFixed(1)}% de marge</span>
         </div>
-        <div class="card-sub">Coût d'achat total sur la période : ${fmtEUR(a.cost)}</div>
-        ${missingCost ? `<div class="callout" style="margin-top:14px;">${missingCost} produit${missingCost !== 1 ? 's' : ''} sans coût d'achat renseigné — la marge les compte à 0 €. <a href="#stock" style="color:var(--brand)">Compléter dans Stock →</a></div>` : ''}
+        <div class="card-sub">Coût d'achat (HT) total sur la période : ${fmtEUR(a.cost)}</div>
+        ${missingCost ? `<div class="callout" style="margin-top:14px;">${missingCost} produit${missingCost !== 1 ? 's' : ''} sans coût d'achat renseigné — la marge les compte à 0 €. <a href="#catalogue" style="color:var(--brand)">Compléter dans Mon catalogue →</a></div>` : ''}
       </div>
       <div class="card">
         <h2>Export comptable</h2>
@@ -1643,7 +1772,7 @@ function pageComptabilite() {
 function exportAccountingCSV() {
   const bounds = getRangeBounds();
   const a = computeAccounting(bounds);
-  const header = ['Date', 'Commande', 'Canal', 'Cliente', 'Statut', 'Montant TTC', 'Montant HT', 'TVA', "Coût d'achat", 'Marge'];
+  const header = ['Date', 'Commande', 'Canal', 'Cliente', 'Statut', 'Montant TTC', 'Montant HT', 'TVA', "Coût d'achat (HT)", 'Marge'];
   const rows = a.orders.map(o => {
     const p = orderProduct(o);
     const isRefund = o.status === 'retour';
@@ -1763,7 +1892,7 @@ function openAddProductModal() {
       <div class="field"><label>Stock initial</label><input type="number" id="pStock" min="0" value="20"></div>
       <div class="field"><label>Seuil d'alerte</label><input type="number" id="pThreshold" min="0" value="10"></div>
     </div>
-    <div class="field"><label>Coût d'achat (par unité)</label><input type="number" id="pCost" min="0" step="0.01" value="0"></div>
+    <div class="field"><label>Coût d'achat (HT, par unité)</label><input type="number" id="pCost" min="0" step="0.01" value="0"></div>
     <div class="field"><label>Canal</label><select id="pChannel">${connectedTypes().map(c => `<option value="${c.type}">${c.label}</option>`).join('')}</select></div>
     <div class="actions"><button class="btn" data-action="closeModal">Annuler</button><button class="btn primary" data-action="submitAddProduct">Ajouter</button></div>
   `);
