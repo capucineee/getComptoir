@@ -2068,6 +2068,15 @@ function pageParametres() {
       <div class="card-sub">Bascule manuelle entre clair et sombre — le bouton reste aussi accessible en haut de chaque page.</div>
       ${themeToggleHTML()}
     </div>
+    <div class="card" style="margin-top:14px;">
+      <h2>Compte &amp; mentions légales</h2>
+      <div class="card-sub">Connecté en tant que ${escapeHTML(getSession()?.email || '')}</div>
+      <div style="display:flex; flex-direction:column; gap:8px; margin-top:10px;">
+        <a href="/politique-confidentialite.html" target="_blank" style="color:var(--brand); font-size:13.5px;">Politique de confidentialité →</a>
+        <a href="/conditions-generales.html" target="_blank" style="color:var(--brand); font-size:13.5px;">Conditions générales d'utilisation →</a>
+        <a href="/mentions-legales.html" target="_blank" style="color:var(--brand); font-size:13.5px;">Mentions légales →</a>
+      </div>
+    </div>
   `;
 }
 
