@@ -1433,7 +1433,16 @@ function productSalesStats(productId) {
   const orders = state.orders.filter(o => o.productId === productId);
   const sold = orders.filter(o => o.status !== 'retour');
   const revenue = sold.reduce((sum, o) => sum + o.amount, 0);
-  return { count: sold.length, revenue, returns: orders.length - sold.length };
+  // Most recent real sale amount for this product — used to suggest a resale price
+  // instead of asking for one Comptoir already knows from the order history. Orders
+  // store the amount actually charged (TTC); Prix de revente is HT (see CATALOG_TARGET_FIELDS),
+  // so the suggestion is converted HT here rather than handed over as-is.
+  const lastSale = sold.length ? sold.reduce((latest, o) => new Date(o.date) > new Date(latest.date) ? o : latest) : null;
+  return {
+    count: sold.length, revenue, returns: orders.length - sold.length,
+    lastSaleTTC: lastSale ? lastSale.amount : null,
+    lastSaleHT: lastSale ? Math.round((lastSale.amount / (1 + VAT_RATE)) * 100) / 100 : null
+  };
 }
 function pageCatalogue() {
   const missingCost = state.products.filter(p => !p.costPrice).length;
@@ -1471,7 +1480,10 @@ function pageCatalogue() {
               <td>${escapeHTML(p.name)}</td>
               <td><input class="stock-input" type="text" value="${escapeHTML(p.supplier || '')}" data-supplier-id="${p.id}" placeholder="—"></td>
               <td class="amount"><input class="stock-input" type="number" min="0" step="0.01" value="${p.costPrice ?? 0}" data-cost-id="${p.id}"></td>
-              <td class="amount"><input class="stock-input" type="number" min="0" step="0.01" value="${p.salePrice ?? ''}" data-sale-price-id="${p.id}" placeholder="—"></td>
+              <td class="amount">
+                <input class="stock-input" type="number" min="0" step="0.01" value="${p.salePrice ?? ''}" data-sale-price-id="${p.id}" placeholder="—">
+                ${p.salePrice == null && stats.lastSaleHT != null ? `<div style="font-size:11px; color:var(--ink-faint); margin-top:3px; white-space:nowrap;">Dernière vente : ${fmtEUR(stats.lastSaleTTC)} TTC (${fmtEUR(stats.lastSaleHT)} HT) — <span class="copy" data-action="useSuggestedSalePrice" data-id="${p.id}" data-price="${stats.lastSaleHT}">utiliser</span></div>` : ''}
+              </td>
               <td class="amount">${hasMargin ? `${fmtEUR(margin)}<span style="color:var(--ink-faint); font-size:11.5px;"> (${marginPct.toFixed(0)}%)</span>` : '<span style="color:var(--ink-faint)">—</span>'}</td>
               <td class="amount">${fmtNum(stats.count)}${stats.returns ? `<span style="color:var(--critical); font-size:11.5px;"> (${stats.returns} retour${stats.returns !== 1 ? 's' : ''})</span>` : ''}</td>
               <td class="amount">${fmtEUR(stats.revenue)}</td>
@@ -1480,7 +1492,7 @@ function pageCatalogue() {
           }).join('')}
         </tbody>
       </table></div>` : `<div class="empty">${catalogFilterIncomplete ? 'Tout est déjà complet — aucun produit ne manque de prix d\'achat ou de fournisseur.' : 'Aucun produit — ajoutez-le manuellement, importez un fichier CSV, ou cliquez « Importer du site » si des ventes sont déjà arrivées.'}</div>`}
-      <div class="card-sub" style="margin-top:10px;">Prix d'achat et prix de revente s'entendent hors taxes (HT) — c'est aussi la base utilisée pour le calcul de marge dans Comptabilité. « Vendu » et « CA généré » comptent vos commandes déjà reçues (hors retours) pour ce produit. « Importer du site » synchronise depuis les ventes déjà reçues par Comptoir — ce n'est pas une lecture en direct de votre site, seules les commandes déjà transmises via le connecteur y figurent. Ajoutez vos propres colonnes (référence, poids, couleur…) ou importez un fichier CSV pour remplir tout le catalogue d'un coup. Vous pouvez aussi cliquer « Exporter en CSV », compléter les prix dans Excel, puis « Importer un CSV » pour renvoyer le fichier — les produits déjà présents (même nom) seront mis à jour, pas dupliqués.</div>
+      <div class="card-sub" style="margin-top:10px;">Prix d'achat et prix de revente s'entendent hors taxes (HT) — c'est aussi la base utilisée pour le calcul de marge dans Comptabilité. Quand un produit n'a pas encore de prix de revente, Comptoir suggère le montant de sa dernière vente réelle. « Vendu » et « CA généré » comptent vos commandes déjà reçues (hors retours) pour ce produit. « Importer du site » synchronise depuis les ventes déjà reçues par Comptoir — ce n'est pas une lecture en direct de votre site, seules les commandes déjà transmises via le connecteur y figurent. Ajoutez vos propres colonnes (référence, poids, couleur…) ou importez un fichier CSV pour remplir tout le catalogue d'un coup. Vous pouvez aussi cliquer « Exporter en CSV », compléter les prix dans Excel, puis « Importer un CSV » pour renvoyer le fichier — les produits déjà présents (même nom) seront mis à jour, pas dupliqués.</div>
     </div>
   `;
 }
@@ -2179,6 +2191,11 @@ document.addEventListener('click', e => {
     return;
   }
   if (action === 'clearCatalogFilter') { catalogFilterIncomplete = false; render(); return; }
+  if (action === 'useSuggestedSalePrice') {
+    const p = state.products.find(p => p.id === el.dataset.id);
+    if (p) { p.salePrice = Number(el.dataset.price) || 0; persist(); render(); toast('Prix de revente renseigné depuis la dernière vente.'); }
+    return;
+  }
   if (action === 'exportCatalog') { exportCatalogCSV(); return; }
 
   if (action === 'openImportCatalog') return openImportCatalogModal();
