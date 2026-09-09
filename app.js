@@ -1570,6 +1570,7 @@ function renderNav() {
     '': '<path d="M2 9h3v5H2zM6.5 5h3v9h-3zM11 2h3v12h-3z"/>',
     'ventes': '<circle cx="5" cy="13" r="1.4"/><circle cx="12" cy="13" r="1.4"/><path d="M1 1h2l1.6 8.2a1.5 1.5 0 0 0 1.48 1.3h6.1a1.5 1.5 0 0 0 1.46-1.16L15 4H3.6" fill="none" stroke="currentColor" stroke-width="1.3"/>',
     'stock': '<path d="M2 4l6-3 6 3v8l-6 3-6-3z" fill="none" stroke="currentColor" stroke-width="1.3"/>',
+    'catalogue': '<path d="M8.5 2H3a1 1 0 0 0-1 1v5.5a1 1 0 0 0 .3.7l6 6a1 1 0 0 0 1.4 0l4.5-4.5a1 1 0 0 0 0-1.4l-6-6a1 1 0 0 0-.7-.3z" fill="none" stroke="currentColor" stroke-width="1.3"/><circle cx="5" cy="5" r="1" fill="currentColor"/>',
     'sav': '<path d="M2 3h12v8H5l-3 3z" fill="none" stroke="currentColor" stroke-width="1.3"/>',
     'connecteurs': '<circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M8 5v3l2 2" fill="none" stroke="currentColor" stroke-width="1.3"/>',
     'facturation': '<rect x="2" y="4" width="12" height="8" rx="1.2" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M2 6.5h12" stroke="currentColor" stroke-width="1.3"/>',
