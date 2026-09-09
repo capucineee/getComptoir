@@ -905,7 +905,7 @@ function pageSAV() {
 
 /* ---------- page: connecteurs ---------- */
 const AVAILABLE_TYPES = ['shopify', 'etsy', 'instagram', 'woocommerce', 'tiktok'];
-const CUSTOM_CONNECTOR_GUIDE_URL = 'https://claude.ai/code/artifact/685c39ff-bfc8-44e5-ae70-d5d5dc24ba45';
+const CUSTOM_CONNECTOR_GUIDE_URL = '/guide-connecteur.html';
 function pageConnecteurs() {
   const connected = state.connectors;
   const notConnected = AVAILABLE_TYPES.filter(t => !connected.some(c => c.type === t));

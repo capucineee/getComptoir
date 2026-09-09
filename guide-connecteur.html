@@ -1,0 +1,224 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Guide d'intégration — Connecteur personnalisé — Comptoir</title>
+<link rel="stylesheet" href="styles.css">
+<style>
+  body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--font); line-height: 1.6; }
+  .topbar {
+    position: sticky; top: 0; z-index: 10; display: flex; align-items: center; gap: 10px;
+    padding: 14px 24px; background: var(--surface); border-bottom: 1px solid var(--rule-soft);
+  }
+  .topbar svg { width: 24px; height: 24px; flex-shrink: 0; }
+  .topbar .name { font-weight: 700; font-size: 15px; }
+  .topbar .tag { color: var(--ink-faint); font-size: 13px; margin-left: 2px; }
+  .topbar .back { margin-left: auto; }
+
+  .wrap { max-width: 760px; margin: 0 auto; padding: 48px 24px 96px; }
+  .eyebrow {
+    display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 600;
+    letter-spacing: 0.04em; text-transform: uppercase; color: var(--brand); background: var(--brand-soft);
+    padding: 5px 11px; border-radius: 100px; margin-bottom: 18px;
+  }
+  h1 { font-size: 30px; font-weight: 700; margin: 0 0 12px; letter-spacing: -0.01em; }
+  .lede { font-size: 16px; color: var(--ink-soft); margin: 0 0 36px; max-width: 58ch; }
+
+  .card { background: var(--surface); border: 1px solid var(--rule-soft); border-radius: 14px; padding: 24px 26px; margin-bottom: 22px; }
+  .step { display: flex; gap: 16px; margin-bottom: 26px; }
+  .step:last-child { margin-bottom: 0; }
+  .step-num {
+    flex-shrink: 0; width: 28px; height: 28px; border-radius: 50%; background: var(--brand); color: #fff;
+    display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 13px; margin-top: 2px;
+  }
+  .step-body h3 { font-size: 16px; margin: 2px 0 6px; }
+  .step-body p { margin: 0; color: var(--ink-soft); font-size: 14.5px; }
+
+  h2 { font-size: 20px; margin: 46px 0 8px; letter-spacing: -0.01em; }
+  h2 .n { color: var(--ink-faint); font-weight: 500; margin-right: 8px; }
+  .section-sub { color: var(--ink-soft); font-size: 14.5px; margin: 0 0 20px; max-width: 60ch; }
+
+  pre {
+    background: var(--surface-sunken); color: var(--ink); border: 1px solid var(--rule-soft);
+    border-radius: 10px; padding: 16px 18px; font-family: var(--font-mono); font-size: 12.5px;
+    line-height: 1.7; overflow-x: auto; margin: 0 0 4px;
+  }
+  pre .k { color: var(--brand); }
+  pre .s { color: var(--warning); }
+  pre .c { color: var(--ink-faint); }
+  .code-label { font-size: 12px; color: var(--ink-faint); text-transform: uppercase; letter-spacing: 0.05em; margin: 20px 0 8px; font-weight: 600; }
+  .code-label:first-child { margin-top: 0; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--rule-soft); vertical-align: top; }
+  th { font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--ink-faint); }
+  td code { background: var(--surface-sunken); padding: 1px 6px; border-radius: 5px; font-size: 12.5px; font-family: var(--font-mono); }
+  .table-wrap { overflow-x: auto; border: 1px solid var(--rule-soft); border-radius: 12px; background: var(--surface); }
+  .table-wrap tr:last-child td { border-bottom: none; }
+  .req { color: var(--brand); font-weight: 600; font-size: 12px; }
+  .opt { color: var(--ink-faint); font-size: 12px; }
+
+  .callout {
+    display: flex; gap: 12px; background: var(--warning-soft); border: 1px solid transparent; color: var(--warning);
+    border-radius: 12px; padding: 15px 17px; margin: 22px 0; font-size: 14px; line-height: 1.6;
+  }
+  .callout svg { flex-shrink: 0; width: 17px; height: 17px; margin-top: 2px; }
+  .callout code { color: inherit; }
+
+  .status-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
+  .status-card { background: var(--surface); border: 1px solid var(--rule-soft); border-radius: 12px; padding: 13px 15px; }
+  .status-card .name { font-family: var(--font-mono); font-weight: 600; font-size: 13px; color: var(--brand); margin-bottom: 5px; }
+  .status-card .aliases { font-size: 12px; color: var(--ink-faint); line-height: 1.6; }
+  @media (max-width: 640px) { .status-grid { grid-template-columns: 1fr; } }
+
+  footer { margin-top: 56px; padding-top: 22px; border-top: 1px solid var(--rule-soft); color: var(--ink-faint); font-size: 13px; }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <svg viewBox="50 50 500 470" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+    <path d="M445 92C386 34 302 0 208 0C93 0 0 93 0 208s93 208 208 208c94 0 178-34 237-92l-65-65c-43 40-102 63-172 63-63 0-114-51-114-114S145 94 208 94c70 0 129 23 172 63z" fill="var(--brand)" transform="translate(75 75)"/>
+    <path d="M16 264c31 91 106 152 192 152 71 0 135-27 184-73l-66-65c-31 28-72 44-118 44-44 0-82-24-100-58-17-31-14-56-14-56-21 14-51 37-78 56z" fill="var(--brand-bright)" transform="translate(75 75)"/>
+  </svg>
+  <span class="name">Comptoir</span>
+  <span class="tag">— Guide d'intégration</span>
+  <a class="back" href="/" style="color:var(--ink-soft); font-size:13px; text-decoration:none;">← Retour à l'app</a>
+</div>
+
+<div class="wrap">
+  <span class="eyebrow">Connecteur personnalisé</span>
+  <h1>Envoyer vos commandes vers Comptoir</h1>
+  <p class="lede">Ce guide s'adresse au développeur ou à la développeuse qui gère le site marchand. Il explique comment brancher son backend pour que chaque nouvelle commande apparaisse automatiquement dans Comptoir, en temps réel.</p>
+
+  <div class="card">
+    <div class="step">
+      <div class="step-num">1</div>
+      <div class="step-body">
+        <h3>Créer le connecteur dans Comptoir</h3>
+        <p>Dans l'onglet <b>Connecteurs</b> de l'app → <b>+ Connecteur personnalisé</b> → donner un nom (ex. le nom du site).</p>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">2</div>
+      <div class="step-body">
+        <h3>Récupérer la clé API et l'endpoint</h3>
+        <p>Comptoir affiche immédiatement une clé API unique et l'adresse à appeler. Transmettre ces deux informations au développeur — la clé ne sera plus réaffichée ensuite.</p>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">3</div>
+      <div class="step-body">
+        <h3>Appeler l'endpoint à chaque commande</h3>
+        <p>Repérer, dans le code du site, l'endroit où une commande est finalisée (fin de paiement, webhook Stripe, etc.) et y ajouter un appel HTTP vers Comptoir.</p>
+      </div>
+    </div>
+  </div>
+
+  <h2><span class="n">01</span>Requête</h2>
+  <p class="section-sub">Un <code>POST</code> avec la clé API en en-tête <code>Authorization</code>. Seul le montant est obligatoire — tout le reste est optionnel.</p>
+
+  <div class="code-label">Endpoint</div>
+  <pre id="endpointLine">POST /api/ingest/orders</pre>
+
+  <div class="code-label">Exemple — curl</div>
+  <pre id="curlExample"><span class="c">curl -X POST</span> /api/ingest/orders \
+  -H <span class="s">"Authorization: Bearer VOTRE_CLÉ_API"</span> \
+  -H <span class="s">"Content-Type: application/json"</span> \
+  -d <span class="s">'{
+    "externalId": "CMD-1234",
+    "amount": 42.90,
+    "status": "livree",
+    "customerName": "Jeanne Dupont",
+    "productName": "Étole en lin écru"
+  }'</span></pre>
+
+  <div class="code-label">Exemple — JavaScript (fetch)</div>
+  <pre id="jsExample"><span class="k">await</span> fetch(<span class="s">"/api/ingest/orders"</span>, {
+  method: <span class="s">"POST"</span>,
+  headers: {
+    <span class="s">"Authorization"</span>: <span class="s">"Bearer VOTRE_CLÉ_API"</span>,
+    <span class="s">"Content-Type"</span>: <span class="s">"application/json"</span>
+  },
+  body: JSON.stringify({
+    externalId: <span class="s">"CMD-1234"</span>,
+    amount: 42.90,
+    status: <span class="s">"livree"</span>,
+    customerName: <span class="s">"Jeanne Dupont"</span>,
+    productName: <span class="s">"Étole en lin écru"</span>
+  })
+});</pre>
+
+  <div class="callout">
+    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="10" cy="10" r="8.2"/><path d="M10 6.5v4M10 13.2v.1"/></svg>
+    <div><b>Anti-doublon.</b> Si <code>externalId</code> est fourni et qu'une commande avec le même identifiant existe déjà, l'appel est ignoré sans créer de doublon — il peut donc être renvoyé sans risque en cas d'échec réseau.</div>
+  </div>
+
+  <h2><span class="n">02</span>Champs reconnus</h2>
+  <p class="section-sub">Comptoir détecte automatiquement plusieurs noms de champs courants, insensible à la casse — pas besoin de reformater exactement les données du site pour qu'elles correspondent.</p>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Champ Comptoir</th><th></th><th>Alias reconnus</th></tr></thead>
+      <tbody>
+        <tr><td><code>amount</code></td><td><span class="req">requis</span></td><td>total, montant, price, totalPrice, grandTotal — tolère virgule décimale et symbole €</td></tr>
+        <tr><td><code>status</code></td><td><span class="opt">optionnel</span></td><td>statut, state, orderStatus — voir statuts ci-dessous ; à défaut, déduit de signaux comme <code>shipped_at</code>, <code>cancelled_at</code>, <code>fulfillment_status</code></td></tr>
+        <tr><td><code>externalId</code></td><td><span class="opt">recommandé</span></td><td>orderId, order_id, reference, ref, orderNumber</td></tr>
+        <tr><td><code>date</code></td><td><span class="opt">optionnel</span></td><td>created_at, createdAt, order_date — format ISO 8601, défaut : maintenant</td></tr>
+        <tr><td><code>customerName</code></td><td><span class="opt">optionnel</span></td><td>client, clientName, nom_client, ou objet <code>customer: {name}</code></td></tr>
+        <tr><td><code>productName</code></td><td><span class="opt">optionnel</span></td><td>product, article, item, ou premier élément d'un tableau <code>items</code>/<code>products</code></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h2><span class="n">03</span>Statuts acceptés</h2>
+  <p class="section-sub">Trois statuts existent côté Comptoir. Les valeurs suivantes sont reconnues automatiquement, avec ou sans accents.</p>
+
+  <div class="status-grid">
+    <div class="status-card">
+      <div class="name">livree</div>
+      <div class="aliases">delivered, shipped, completed, fulfilled, paid, payee</div>
+    </div>
+    <div class="status-card">
+      <div class="name">preparation</div>
+      <div class="aliases">pending, processing, en_attente, created, new, confirmed <span style="opacity:.7">(défaut)</span></div>
+    </div>
+    <div class="status-card">
+      <div class="name">retour</div>
+      <div class="aliases">refunded, returned, cancelled, canceled, annulee, rembourse</div>
+    </div>
+  </div>
+
+  <div class="callout">
+    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="10" cy="10" r="8.2"/><path d="M10 6.5v4M10 13.2v.1"/></svg>
+    <div>Un statut non reconnu ne bloque pas l'envoi : la commande est acceptée avec le statut <code>preparation</code>, et la réponse inclut un champ <code>note</code> le précisant.</div>
+  </div>
+
+  <h2><span class="n">04</span>Réponses</h2>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Code</th><th>Signification</th></tr></thead>
+      <tbody>
+        <tr><td><code>200</code></td><td>Commande créée (ou déjà existante — voir <code>duplicate</code> dans la réponse)</td></tr>
+        <tr><td><code>400</code></td><td>Montant manquant/invalide, ou date mal formée</td></tr>
+        <tr><td><code>401</code></td><td>Clé API manquante ou invalide</td></tr>
+        <tr><td><code>409</code></td><td>Compte pas encore initialisé — se connecter une première fois à l'app</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <footer>Comptoir — Vendez partout. Comptez ici.</footer>
+</div>
+
+<script>
+  // Fill in the real origin so the examples are copy-pasteable as-is.
+  const origin = location.origin;
+  document.getElementById('endpointLine').textContent = 'POST ' + origin + '/api/ingest/orders';
+  ['curlExample', 'jsExample'].forEach(id => {
+    const el = document.getElementById(id);
+    el.innerHTML = el.innerHTML.replace('/api/ingest/orders', origin + '/api/ingest/orders');
+  });
+</script>
+</body>
+</html>
