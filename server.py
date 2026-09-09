@@ -434,35 +434,56 @@ def handle_ingest_order(api_key, body):
         data = json.loads(state_row["data"])
         orders = data.setdefault("orders", [])
 
+        products = data.setdefault("products", [])
+
+        def find_or_create_product(name):
+            match = next((p for p in products if p.get("name", "").strip().lower() == name.lower()), None)
+            if match:
+                return match["id"]
+            # Unknown product on a real sale — create it rather than silently losing the
+            # link. Stock is never guessed: it starts at 0, flagged for the merchant to
+            # fill in for real, same as cost price and supplier.
+            new_product = {
+                "id": secrets.token_hex(8),
+                "name": name,
+                "stock": 0,
+                "threshold": 10,
+                "costPrice": 0,
+                "salePrice": None,
+                "supplier": "",
+                "custom": {},
+                "channels": [],
+            }
+            products.append(new_product)
+            return new_product["id"]
+
         if external_id:
             existing = next((o for o in orders if o.get("externalId") == external_id), None)
             if existing:
+                # An order ingested before product auto-creation existed (or before this
+                # product had a name Comptoir recognized) can be missing its product link.
+                # Re-sending the same order (same externalId) is exactly how a merchant
+                # backfills that — fix the link now instead of just reporting "duplicate".
+                backfilled = False
+                if not existing.get("productId") and product_name:
+                    existing["productId"] = find_or_create_product(product_name)
+                    backfilled = True
+                if backfilled:
+                    new_data = json.dumps(data)
+                    conn.execute(
+                        "UPDATE app_state SET data = ?, updated_at = datetime('now') WHERE user_id = ?",
+                        (new_data, user_id),
+                    )
+                    conn.commit()
                 conn.close()
-                return {"ok": True, "duplicate": True, "orderId": existing["id"], "orderNumber": existing["orderNumber"]}
+                result = {"ok": True, "duplicate": True, "orderId": existing["id"], "orderNumber": existing["orderNumber"]}
+                if backfilled:
+                    result["backfilled"] = True
+                return result
 
         product_id = None
         if product_name:
-            products = data.setdefault("products", [])
-            match = next((p for p in products if p.get("name", "").strip().lower() == product_name.lower()), None)
-            if match:
-                product_id = match["id"]
-            else:
-                # Unknown product on a real sale — create it rather than silently losing the
-                # link. Stock is never guessed: it starts at 0, flagged for the merchant to
-                # fill in for real, same as cost price and supplier.
-                new_product = {
-                    "id": secrets.token_hex(8),
-                    "name": product_name,
-                    "stock": 0,
-                    "threshold": 10,
-                    "costPrice": 0,
-                    "salePrice": None,
-                    "supplier": "",
-                    "custom": {},
-                    "channels": [],
-                }
-                products.append(new_product)
-                product_id = new_product["id"]
+            product_id = find_or_create_product(product_name)
 
         next_number = max([o.get("orderNumber", 0) for o in orders], default=1000) + 1
         order = {

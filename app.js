@@ -268,6 +268,10 @@ function migrateState(s) {
   s.products = s.products || [];
   s.connectors = s.connectors || [];
   s.savTickets = s.savTickets || [];
+  s.billingHistory = s.billingHistory || [];
+  s.plan = s.plan || { tier: 'decouverte', renewsAt: isoDaysAgo(-30) };
+  s.range = s.range || '30';
+  s.theme = s.theme ?? null;
   s.customFields = s.customFields || [];
   s.customFields.forEach(f => { f.source = f.source || 'manual'; });
   s.orders.forEach(o => { o.custom = o.custom || {}; });
@@ -284,12 +288,13 @@ function migrateState(s) {
     p.custom = p.custom || {};
     p.channels = p.channels || [];
   });
-  const byChannel = type => s.products.filter(p => p.channels.includes(type));
+  // Note: orders with no productId are left alone here on purpose. An older version of
+  // this migration used to randomly assign one from the catalog — harmless for the
+  // fabricated demo data it was written for, but it would fabricate sales history for a
+  // real, genuinely-unlinked order (see server.py's ingest auto-create/backfill instead,
+  // which is how a real order actually gets its product back).
   s.orders.forEach(o => {
-    if (o.productId && s.products.some(p => p.id === o.productId)) return;
-    const eligible = byChannel(o.channelType);
-    const pick = (eligible.length ? eligible : s.products)[Math.floor(Math.random() * (eligible.length ? eligible.length : s.products.length))];
-    o.productId = pick ? pick.id : null;
+    if (o.productId && !s.products.some(p => p.id === o.productId)) o.productId = null;
   });
   return s;
 }
@@ -1195,10 +1200,17 @@ const CATALOG_TARGET_FIELDS = [
   { key: 'threshold', label: "Seuil d'alerte" },
 ];
 let catalogFilterIncomplete = false;
+function productSalesStats(productId) {
+  const orders = state.orders.filter(o => o.productId === productId);
+  const sold = orders.filter(o => o.status !== 'retour');
+  const revenue = sold.reduce((sum, o) => sum + o.amount, 0);
+  return { count: sold.length, revenue, returns: orders.length - sold.length };
+}
 function pageCatalogue() {
   const missingCost = state.products.filter(p => !p.costPrice).length;
   const incomplete = state.products.filter(p => !p.costPrice || !p.supplier);
   const shown = catalogFilterIncomplete ? incomplete : state.products;
+  const orphanOrders = state.orders.filter(o => !o.productId);
   return `
     <div class="topbar">
       <div><h1>Mon catalogue</h1><div class="sub">${fmtNum(state.products.length)} produit${state.products.length !== 1 ? 's' : ''}${missingCost ? ` · ${missingCost} sans prix d'achat` : ''}</div></div>
@@ -1211,10 +1223,11 @@ function pageCatalogue() {
       </div>
     </div>
     ${catalogFilterIncomplete ? `<div class="callout" style="margin-bottom:14px;">Affichage filtré : ${fmtNum(incomplete.length)} produit${incomplete.length !== 1 ? 's' : ''} sans prix d'achat ou sans fournisseur. <span class="copy" data-action="clearCatalogFilter">Voir tout le catalogue</span></div>` : ''}
+    ${orphanOrders.length ? `<div class="callout" style="margin-bottom:14px;">${fmtNum(orphanOrders.length)} commande${orphanOrders.length !== 1 ? 's' : ''} sans produit rattaché — envoyée${orphanOrders.length !== 1 ? 's' : ''} avant la mise à jour du connecteur. Redemandez à votre développeur de les renvoyer (même <code>externalId</code>) : elles se rattacheront automatiquement au produit dès qu'il enverra le nom du produit avec.</div>` : ''}
     <div class="card">
       ${shown.length ? `<div class="table-scroll"><table class="data">
         <thead><tr>
-          <th>Produit</th><th>Fournisseur</th><th>Prix d'achat</th><th>Prix de revente</th><th>Marge</th>
+          <th>Produit</th><th>Fournisseur</th><th>Prix d'achat</th><th>Prix de revente</th><th>Marge</th><th>Vendu</th><th>CA généré</th>
           ${state.catalogFields.map(f => `<th>${escapeHTML(f.label)}<span class="field-remove" data-action="removeCatalogField" data-id="${f.id}" title="Retirer cette colonne">×</span></th>`).join('')}
         </tr></thead>
         <tbody>
@@ -1222,6 +1235,7 @@ function pageCatalogue() {
             const hasMargin = p.salePrice != null && p.costPrice != null;
             const margin = hasMargin ? p.salePrice - p.costPrice : null;
             const marginPct = hasMargin && p.salePrice ? (margin / p.salePrice * 100) : null;
+            const stats = productSalesStats(p.id);
             return `
             <tr>
               <td>${escapeHTML(p.name)}</td>
@@ -1229,12 +1243,14 @@ function pageCatalogue() {
               <td class="amount"><input class="stock-input" type="number" min="0" step="0.01" value="${p.costPrice ?? 0}" data-cost-id="${p.id}"></td>
               <td class="amount"><input class="stock-input" type="number" min="0" step="0.01" value="${p.salePrice ?? ''}" data-sale-price-id="${p.id}" placeholder="—"></td>
               <td class="amount">${hasMargin ? `${fmtEUR(margin)}<span style="color:var(--ink-faint); font-size:11.5px;"> (${marginPct.toFixed(0)}%)</span>` : '<span style="color:var(--ink-faint)">—</span>'}</td>
+              <td class="amount">${fmtNum(stats.count)}${stats.returns ? `<span style="color:var(--critical); font-size:11.5px;"> (${stats.returns} retour${stats.returns !== 1 ? 's' : ''})</span>` : ''}</td>
+              <td class="amount">${fmtEUR(stats.revenue)}</td>
               ${state.catalogFields.map(f => `<td><input class="stock-input" type="text" value="${escapeHTML(p.custom[f.id] || '')}" data-catalog-custom-id="${p.id}" data-field-id="${f.id}"></td>`).join('')}
             </tr>`;
           }).join('')}
         </tbody>
       </table></div>` : `<div class="empty">${catalogFilterIncomplete ? 'Tout est déjà complet — aucun produit ne manque de prix d\'achat ou de fournisseur.' : 'Aucun produit — ajoutez-le manuellement, importez un fichier CSV, ou cliquez « Importer du site » si des ventes sont déjà arrivées.'}</div>`}
-      <div class="card-sub" style="margin-top:10px;">Le prix d'achat alimente le calcul de marge dans Comptabilité. « Importer du site » récupère les produits déjà présents dans vos ventes ; ajoutez vos propres colonnes (référence, poids, couleur…) ou importez un fichier CSV pour remplir tout le catalogue d'un coup.</div>
+      <div class="card-sub" style="margin-top:10px;">Le prix d'achat alimente le calcul de marge dans Comptabilité. « Vendu » et « CA généré » comptent vos commandes déjà reçues (hors retours) pour ce produit. « Importer du site » synchronise depuis les ventes déjà reçues par Comptoir — ce n'est pas une lecture en direct de votre site, seules les commandes déjà transmises via le connecteur y figurent. Ajoutez vos propres colonnes (référence, poids, couleur…) ou importez un fichier CSV pour remplir tout le catalogue d'un coup.</div>
     </div>
   `;
 }
@@ -1888,10 +1904,11 @@ document.addEventListener('click', e => {
     render();
     if (state.products.length === 0 && orphanOrders.length === 0) {
       toast('Aucune vente enregistrée pour l\'instant — le catalogue se remplira automatiquement dès les premières commandes.', true);
-    } else if (incomplete > 0) {
-      toast(`${fmtNum(state.products.length)} produit${state.products.length !== 1 ? 's' : ''} distinct${state.products.length !== 1 ? 's' : ''} depuis vos ventes — ${incomplete} à compléter (prix d'achat / fournisseur).`);
     } else {
-      toast(`${fmtNum(state.products.length)} produit${state.products.length !== 1 ? 's' : ''} distinct${state.products.length !== 1 ? 's' : ''} depuis vos ventes, tous déjà complets.`);
+      let msg = `${fmtNum(state.products.length)} produit${state.products.length !== 1 ? 's' : ''} distinct${state.products.length !== 1 ? 's' : ''} depuis vos ventes`;
+      msg += incomplete > 0 ? ` — ${incomplete} à compléter (prix d'achat / fournisseur).` : ', tous déjà complets.';
+      if (orphanOrders.length) msg += ` ${orphanOrders.length} commande${orphanOrders.length !== 1 ? 's' : ''} sans produit rattaché (voir ci-dessous).`;
+      toast(msg, orphanOrders.length > 0);
     }
     return;
   }
