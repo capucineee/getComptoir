@@ -407,6 +407,296 @@ function renderTransition(done) {
   }, 1450);
 }
 
+/* ---------- landing page ----------
+ * Shown to visitors with no session — served by this same app, not a separate
+ * marketing site, so its CTAs go straight into the real auth screen below
+ * (renderAuth), which already talks to the real API. No separate signup path
+ * to keep in sync. */
+function renderLanding() {
+  document.getElementById('appRoot').style.display = 'none';
+  const dark = resolvedTheme() === 'dark';
+  document.getElementById('authRoot').innerHTML = `
+    <div id="landingRoot">
+      <style>
+        #landingRoot { background: var(--bg); color: var(--ink); }
+        #landingRoot .wrap { max-width: 1080px; margin: 0 auto; padding: 0 24px; }
+        #landingRoot section { position: relative; }
+        #landingRoot a { color: inherit; }
+        #landingRoot img, #landingRoot svg { display: block; max-width: 100%; }
+
+        #landingRoot header.l-nav {
+          position: sticky; top: 0; z-index: 20;
+          background: color-mix(in srgb, var(--bg) 86%, transparent);
+          backdrop-filter: blur(10px);
+          border-bottom: 1px solid var(--rule-soft);
+        }
+        #landingRoot .l-nav-row { display: flex; align-items: center; justify-content: space-between; padding: 14px 0; }
+        #landingRoot .l-nav-brand { display: flex; align-items: center; gap: 9px; font-weight: 800; font-size: 16px; letter-spacing: -0.02em; }
+        #landingRoot .l-nav-brand svg { width: 24px; height: 23px; }
+        #landingRoot .l-nav-links { display: flex; align-items: center; gap: 28px; font-size: 13.5px; color: var(--ink-soft); }
+        #landingRoot .l-nav-links a:hover { color: var(--ink); }
+        #landingRoot .l-nav-right { display: flex; align-items: center; gap: 10px; }
+        #landingRoot .l-nav-cta { font-family: var(--font); font-weight: 650; font-size: 13px; background: var(--ink); color: var(--bg); padding: 9px 16px; border-radius: 7px; white-space: nowrap; border: none; cursor: pointer; }
+        #landingRoot .l-nav-cta:hover { background: var(--brand); color: #fff; }
+        @media (max-width: 640px) { #landingRoot .l-nav-links { display: none; } }
+
+        #landingRoot .l-hero { padding: 88px 0 76px; overflow: hidden; }
+        #landingRoot .l-hero-inner { position: relative; z-index: 2; max-width: 640px; }
+        #landingRoot .l-eyebrow {
+          display: inline-flex; align-items: center; gap: 8px;
+          font-family: var(--font-mono); font-size: 11.5px; letter-spacing: 0.04em;
+          color: var(--brand); background: var(--brand-soft); padding: 5px 11px 5px 9px; border-radius: 20px;
+          margin-bottom: 22px;
+        }
+        #landingRoot .l-eyebrow .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--brand); }
+        #landingRoot h1.l-hero-h { font-size: clamp(38px, 6vw, 60px); line-height: 1.04; font-weight: 800; letter-spacing: -0.03em; margin: 0 0 22px; text-wrap: balance; }
+        #landingRoot h1.l-hero-h .accent { color: var(--brand); }
+        #landingRoot .l-hero-sub { font-size: 17px; line-height: 1.55; color: var(--ink-soft); max-width: 50ch; margin: 0 0 32px; }
+        #landingRoot .l-hero-ctas { display: flex; gap: 10px; flex-wrap: wrap; }
+        #landingRoot .l-btn-cta {
+          height: 48px; padding: 0 22px; border-radius: 8px; font-weight: 650; font-size: 14.5px;
+          cursor: pointer; display: inline-flex; align-items: center; justify-content: center; white-space: nowrap;
+          border: 1px solid transparent; font-family: var(--font); text-decoration: none;
+        }
+        #landingRoot .l-btn-cta.primary { background: var(--brand); color: #fff; }
+        #landingRoot .l-btn-cta.primary:hover { background: var(--brand-bright); }
+        #landingRoot .l-btn-cta.ghost { background: transparent; border-color: var(--rule); color: var(--ink); }
+        #landingRoot .l-btn-cta.ghost:hover { border-color: var(--brand); color: var(--brand); }
+        #landingRoot .l-hero-note { font-size: 12.5px; color: var(--ink-faint); margin-top: 14px; }
+
+        #landingRoot .l-hero-chart { position: absolute; right: -6%; top: 6%; width: 62%; height: 74%; z-index: 1; opacity: 0.9; pointer-events: none; }
+        @media (max-width: 900px) { #landingRoot .l-hero-chart { opacity: 0.35; width: 100%; right: 0; } }
+        #landingRoot .l-hero-chart .line { fill: none; stroke: var(--brand); stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; }
+        #landingRoot .l-hero-chart .area { fill: url(#landingHeroFill); }
+        #landingRoot .l-hero-chart .dot { fill: var(--brand); }
+
+        #landingRoot .l-section-head { max-width: 560px; margin: 0 0 40px; }
+        #landingRoot .l-section-eyebrow { font-family: var(--font-mono); font-size: 11.5px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--brand); margin-bottom: 10px; }
+        #landingRoot h2.l-section-h { font-size: clamp(24px, 3.4vw, 32px); font-weight: 800; letter-spacing: -0.02em; margin: 0 0 10px; text-wrap: balance; }
+        #landingRoot .l-section-sub { font-size: 15.5px; color: var(--ink-soft); line-height: 1.55; }
+
+        #landingRoot .l-problem { padding: 90px 0; background: var(--surface-sunken); border-top: 1px solid var(--rule-soft); border-bottom: 1px solid var(--rule-soft); }
+        #landingRoot .l-compare { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+        @media (max-width: 720px) { #landingRoot .l-compare { grid-template-columns: 1fr; } }
+        #landingRoot .l-compare-card { background: var(--surface); border: 1px solid var(--rule-soft); border-radius: 12px; padding: 26px 24px; }
+        #landingRoot .l-compare-card h3 { font-size: 13px; margin: 0 0 16px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--ink-faint); }
+        #landingRoot .l-compare-card.after { border-color: var(--brand); }
+        #landingRoot .l-compare-card.after h3 { color: var(--brand); }
+        #landingRoot .l-compare-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 13px; }
+        #landingRoot .l-compare-list li { display: flex; gap: 10px; font-size: 14.5px; line-height: 1.5; color: var(--ink); }
+        #landingRoot .l-compare-list .mk { flex: none; width: 16px; height: 16px; margin-top: 2px; }
+        #landingRoot .l-compare-card.now .mk { color: var(--ink-faint); }
+        #landingRoot .l-compare-card.after .mk { color: var(--brand); }
+
+        #landingRoot .l-features { padding: 90px 0; }
+        #landingRoot .l-feature-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
+        @media (max-width: 900px) { #landingRoot .l-feature-grid { grid-template-columns: repeat(2, 1fr); } }
+        @media (max-width: 520px) { #landingRoot .l-feature-grid { grid-template-columns: 1fr; } }
+        #landingRoot .l-feature-card { background: var(--surface); border: 1px solid var(--rule-soft); border-radius: 12px; padding: 22px 20px; }
+        #landingRoot .l-feature-ico { width: 34px; height: 34px; border-radius: 9px; background: var(--brand-soft); color: var(--brand); display: flex; align-items: center; justify-content: center; margin-bottom: 14px; }
+        #landingRoot .l-feature-ico svg { width: 18px; height: 18px; }
+        #landingRoot .l-feature-card h3 { font-size: 15px; margin: 0 0 6px; }
+        #landingRoot .l-feature-card p { font-size: 13.5px; color: var(--ink-soft); line-height: 1.5; margin: 0; }
+
+        #landingRoot .l-channels { padding: 0 0 90px; }
+        #landingRoot .l-channel-row { display: flex; flex-wrap: wrap; gap: 10px; }
+        #landingRoot .l-channel-chip { display: flex; align-items: center; gap: 8px; border: 1px solid var(--rule-soft); background: var(--surface); border-radius: 20px; padding: 9px 16px 9px 12px; font-size: 13.5px; }
+        #landingRoot .l-channel-chip .sw { width: 8px; height: 8px; border-radius: 50%; }
+        #landingRoot .l-channel-chip.plus { border-style: dashed; color: var(--ink-faint); }
+
+        #landingRoot .l-pricing { padding: 90px 0; background: var(--surface-sunken); border-top: 1px solid var(--rule-soft); border-bottom: 1px solid var(--rule-soft); }
+        #landingRoot .l-plan-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+        @media (max-width: 800px) { #landingRoot .l-plan-grid { grid-template-columns: 1fr; } }
+        #landingRoot .l-plan-card { background: var(--surface); border: 1px solid var(--rule-soft); border-radius: 14px; padding: 26px 24px; display: flex; flex-direction: column; gap: 14px; }
+        #landingRoot .l-plan-card.feat { border: 2px solid var(--brand); position: relative; }
+        #landingRoot .l-plan-tag { position: absolute; top: -12px; left: 20px; background: var(--brand); color: #fff; font-size: 11px; font-weight: 700; padding: 3px 10px; border-radius: 20px; }
+        #landingRoot .l-plan-name { font-weight: 700; font-size: 15.5px; }
+        #landingRoot .l-plan-price { font-family: var(--font-mono); font-size: 30px; font-weight: 600; font-variant-numeric: tabular-nums; }
+        #landingRoot .l-plan-price span { font-size: 12.5px; font-weight: 400; color: var(--ink-faint); }
+        #landingRoot .l-plan-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; font-size: 13.5px; color: var(--ink-soft); }
+        #landingRoot .l-plan-list li::before { content: "+ "; color: var(--brand); font-weight: 700; }
+        #landingRoot .l-plan-cta { margin-top: auto; width: 100%; text-align: center; padding: 10px; border-radius: 8px; border: 1px solid var(--rule); background: var(--surface); color: var(--ink); font-size: 13.5px; font-weight: 650; font-family: var(--font); cursor: pointer; }
+        #landingRoot .l-plan-card.feat .l-plan-cta { background: var(--brand); border-color: var(--brand); color: #fff; }
+        #landingRoot .l-plan-note { font-size: 12px; color: var(--ink-faint); margin-top: 24px; }
+
+        #landingRoot .l-final { padding: 100px 0 110px; text-align: left; }
+        #landingRoot .l-final-inner { max-width: 560px; }
+        #landingRoot .l-final h2 { font-size: clamp(26px, 4vw, 38px); font-weight: 800; letter-spacing: -0.02em; margin: 0 0 14px; text-wrap: balance; }
+        #landingRoot .l-final p { font-size: 15.5px; color: var(--ink-soft); margin: 0 0 30px; }
+
+        #landingRoot footer.l-foot { border-top: 1px solid var(--rule-soft); padding: 28px 0 40px; }
+        #landingRoot .l-foot-row { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; font-size: 12.5px; color: var(--ink-faint); }
+        #landingRoot .l-foot-brand { display: flex; align-items: center; gap: 8px; }
+        #landingRoot .l-foot-brand svg { width: 18px; height: 17px; }
+        #landingRoot .l-foot-links { display: flex; align-items: center; gap: 18px; }
+        #landingRoot .l-foot-links a { color: var(--ink-faint); text-decoration: none; }
+        #landingRoot .l-foot-links a:hover { color: var(--brand); text-decoration: underline; }
+      </style>
+
+      <header class="l-nav">
+        <div class="wrap l-nav-row">
+          <div class="l-nav-brand">${AUTH_MARK}Comptoir</div>
+          <nav class="l-nav-links">
+            <a href="#l-fonctionnalites">Fonctionnalités</a>
+            <a href="#l-tarifs">Tarifs</a>
+          </nav>
+          <div class="l-nav-right">
+            <button class="theme-toggle" data-action="landingToggleTheme">
+              ${dark
+                ? `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="8" r="3"/><path d="M8 1v1.6M8 13.4V15M2.6 8H1M15 8h-1.6M3.5 3.5l1.1 1.1M11.4 11.4l1.1 1.1M12.5 3.5l-1.1 1.1M4.6 11.4l-1.1 1.1"/></svg>`
+                : `<svg viewBox="0 0 16 16" fill="currentColor"><path d="M13.5 9.8A5.8 5.8 0 0 1 6.2 2.5a5.8 5.8 0 1 0 7.3 7.3z"/></svg>`}
+              ${dark ? 'Sombre' : 'Clair'}
+            </button>
+            <button class="l-nav-cta" data-action="authSwitch" data-mode="signup" type="button">Créer un compte / Se connecter</button>
+          </div>
+        </div>
+      </header>
+
+      <section class="l-hero">
+        <div class="wrap">
+          <div class="l-hero-inner">
+            <div class="l-eyebrow"><span class="dot"></span>Multicanal · Stock synchronisé · Facturation automatique</div>
+            <h1 class="l-hero-h">Vendez partout.<br><span class="accent">Comptez ici.</span></h1>
+            <p class="l-hero-sub">Comptoir centralise vos ventes Shopify, Etsy, Instagram et vos plateformes personnalisées dans un seul tableau de bord — stock synchronisé, alertes automatiques, zéro tableur.</p>
+            <div class="l-hero-ctas">
+              <button class="l-btn-cta primary" data-action="authSwitch" data-mode="signup" type="button">Créer un compte</button>
+              <a class="l-btn-cta ghost" href="#l-tarifs">Voir les tarifs</a>
+            </div>
+            <div class="l-hero-note">Installation en moins de 5 minutes. Sans engagement de durée.</div>
+          </div>
+        </div>
+        <svg class="l-hero-chart" viewBox="0 0 500 340" preserveAspectRatio="xMidYMid meet" aria-hidden="true">
+          <defs>
+            <linearGradient id="landingHeroFill" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stop-color="var(--brand)" stop-opacity="0.22"/>
+              <stop offset="100%" stop-color="var(--brand)" stop-opacity="0"/>
+            </linearGradient>
+          </defs>
+          <polygon class="area" points="0,300 20,285 55,292 90,255 125,268 160,222 195,238 230,190 265,205 300,150 335,168 370,110 405,128 440,70 475,88 500,60 500,340 0,340"/>
+          <polyline class="line" points="0,300 20,285 55,292 90,255 125,268 160,222 195,238 230,190 265,205 300,150 335,168 370,110 405,128 440,70 475,88 500,60"/>
+          <circle class="dot" cx="500" cy="60" r="5.5"/>
+        </svg>
+      </section>
+
+      <section class="l-problem">
+        <div class="wrap">
+          <div class="l-section-head">
+            <div class="l-section-eyebrow">Le problème</div>
+            <h2 class="l-section-h">Vous vendez déjà sur plusieurs canaux. Vos outils, eux, ne se parlent pas.</h2>
+            <p class="l-section-sub">Chaque plateforme a son propre tableau de bord — aucune ne voit ce qui se passe chez les autres.</p>
+          </div>
+          <div class="l-compare">
+            <div class="l-compare-card now">
+              <h3>Aujourd'hui</h3>
+              <ul class="l-compare-list">
+                <li><svg class="mk" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 4l8 8M12 4l-8 8"/></svg>Un onglet par plateforme, ouverts en permanence</li>
+                <li><svg class="mk" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 4l8 8M12 4l-8 8"/></svg>Un tableur pour recouper le chiffre d'affaires</li>
+                <li><svg class="mk" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 4l8 8M12 4l-8 8"/></svg>Le stock mis à jour à la main, canal par canal</li>
+                <li><svg class="mk" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 4l8 8M12 4l-8 8"/></svg>La rupture de stock découverte après-coup</li>
+              </ul>
+            </div>
+            <div class="l-compare-card after">
+              <h3>Avec Comptoir</h3>
+              <ul class="l-compare-list">
+                <li><svg class="mk" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 8.5l3 3 7-7"/></svg>Un seul tableau de bord pour tous vos canaux</li>
+                <li><svg class="mk" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 8.5l3 3 7-7"/></svg>Le chiffre d'affaires consolidé, en temps réel</li>
+                <li><svg class="mk" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 8.5l3 3 7-7"/></svg>Un stock partagé, décrémenté automatiquement</li>
+                <li><svg class="mk" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 8.5l3 3 7-7"/></svg>Une alerte avant la rupture, pas après</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="l-features" id="l-fonctionnalites">
+        <div class="wrap">
+          <div class="l-section-head">
+            <div class="l-section-eyebrow">Fonctionnalités</div>
+            <h2 class="l-section-h">Tout ce qu'il faut, rien de plus</h2>
+          </div>
+          <div class="l-feature-grid">
+            <div class="l-feature-card">
+              <div class="l-feature-ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 3l4.5 3-4.5 3M14 3l-4.5 3 4.5 3M6.5 13h3"/></svg></div>
+              <h3>Centralisation multicanal</h3>
+              <p>Shopify, Etsy, Instagram Shop et vos plateformes personnalisées, réunis dans un seul tableau de bord.</p>
+            </div>
+            <div class="l-feature-card">
+              <div class="l-feature-ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 4l6-3 6 3v8l-6 3-6-3z"/></svg></div>
+              <h3>Stock synchronisé</h3>
+              <p>Un stock partagé entre canaux, avec une alerte avant la rupture — pas après.</p>
+            </div>
+            <div class="l-feature-card">
+              <div class="l-feature-ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="6"/><path d="M8 5v3l2 2"/></svg></div>
+              <h3>Connecteurs en libre-service</h3>
+              <p>Ajoutez une plateforme vous-même, en quelques minutes — sans ticket support.</p>
+            </div>
+            <div class="l-feature-card">
+              <div class="l-feature-ico"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="4" width="12" height="8" rx="1.2"/><path d="M2 6.5h12"/></svg></div>
+              <h3>Facturation automatique</h3>
+              <p>Changez de forfait en un clic — débloqué immédiatement, sans attendre personne.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="l-channels">
+        <div class="wrap">
+          <div class="l-channel-row">
+            <div class="l-channel-chip"><span class="sw" style="background:var(--cat-shopify)"></span>Shopify</div>
+            <div class="l-channel-chip"><span class="sw" style="background:var(--cat-etsy)"></span>Etsy</div>
+            <div class="l-channel-chip"><span class="sw" style="background:var(--cat-instagram)"></span>Instagram Shop</div>
+            <div class="l-channel-chip"><span class="sw" style="background:var(--cat-woocommerce)"></span>WooCommerce</div>
+            <div class="l-channel-chip plus">+ votre plateforme, via API</div>
+          </div>
+        </div>
+      </section>
+
+      <section class="l-pricing" id="l-tarifs">
+        <div class="wrap">
+          <div class="l-section-head">
+            <div class="l-section-eyebrow">Tarifs</div>
+            <h2 class="l-section-h">Un prix d'entrée pensé pour débuter petit</h2>
+            <p class="l-section-sub">Vous grandissez, votre forfait grandit avec vous.</p>
+          </div>
+          <div class="l-plan-grid">
+            ${Object.entries(PLAN_META).map(([key, p]) => `
+              <div class="l-plan-card ${key === 'multicanal' ? 'feat' : ''}">
+                ${key === 'multicanal' ? '<span class="l-plan-tag">Le plus choisi</span>' : ''}
+                <div class="l-plan-name">${p.name}</div>
+                <div class="l-plan-price">${fmtEUR(p.price)}<span>/mois</span></div>
+                <ul class="l-plan-list"><li>${p.channels === Infinity ? 'Canaux illimités' : p.channels + ' canal' + (p.channels > 1 ? 'aux' : '')}</li><li>${fmtNum(p.orders)} commandes / mois</li></ul>
+                <button class="l-plan-cta" data-action="authSwitch" data-mode="signup" type="button">Choisir ${p.name}</button>
+              </div>
+            `).join('')}
+          </div>
+          <div class="l-plan-note">Résiliable à tout moment, sans engagement de durée.</div>
+        </div>
+      </section>
+
+      <section class="l-final">
+        <div class="wrap l-final-inner">
+          <h2>Prêt à centraliser vos ventes ?</h2>
+          <p>Créez votre compte et connectez votre première plateforme en quelques minutes.</p>
+          <div class="l-hero-ctas">
+            <button class="l-btn-cta primary" data-action="authSwitch" data-mode="signup" type="button">Créer un compte</button>
+            <a class="l-btn-cta ghost" href="#l-tarifs">Comparer les forfaits</a>
+          </div>
+        </div>
+      </section>
+
+      <footer class="l-foot">
+        <div class="wrap l-foot-row">
+          <div class="l-foot-brand">${AUTH_MARK}Comptoir</div>
+          <div class="l-foot-links">
+            <a href="mailto:contact@getcomptoir.fr">contact@getcomptoir.fr</a>
+            <span>© 2026 Comptoir. Vendez partout. Comptez ici.</span>
+          </div>
+        </div>
+      </footer>
+    </div>
+  `;
+}
+
 function renderAuth(mode) {
   const isSignup = mode === 'signup';
   document.getElementById('appRoot').style.display = 'none';
@@ -459,7 +749,7 @@ function renderAuth(mode) {
 
 async function boot() {
   const session = getSession();
-  if (!session || !session.token) return renderAuth('login');
+  if (!session || !session.token) return renderLanding();
   let me;
   try {
     me = await apiRequest('/api/me', { token: session.token });
@@ -1338,6 +1628,12 @@ document.addEventListener('click', e => {
   const action = el.dataset.action;
 
   if (action === 'toggleTheme') return toggleTheme();
+  if (action === 'landingToggleTheme') {
+    state.theme = resolvedTheme() === 'dark' ? 'light' : 'dark';
+    paintTheme();
+    renderLanding();
+    return;
+  }
   if (action === 'setAccent') {
     state.accent = el.dataset.accent;
     persist(); applyAccent(); render();
@@ -1592,3 +1888,7 @@ function renderKeepFocus(id) {
 /* ---------- init ---------- */
 paintTheme();
 renderSplash(boot);
+
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js').catch(() => {}));
+}
