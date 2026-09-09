@@ -1198,6 +1198,29 @@ const CATALOG_TARGET_FIELDS = [
   { key: 'threshold', label: "Seuil d'alerte" },
 ];
 let catalogFilterIncomplete = false;
+function exportCatalogCSV() {
+  const header = ['Nom du produit', "Prix d'achat", 'Prix de revente', 'Fournisseur', 'Stock', "Seuil d'alerte", ...state.catalogFields.map(f => f.label)];
+  const rows = state.products.map(p => [
+    p.name,
+    p.costPrice != null ? String(p.costPrice) : '',
+    p.salePrice != null ? String(p.salePrice) : '',
+    p.supplier || '',
+    String(p.stock ?? 0),
+    String(p.threshold ?? 0),
+    ...state.catalogFields.map(f => p.custom[f.id] || '')
+  ]);
+  const csvEscape = v => /[";\n]/.test(v) ? `"${String(v).replace(/"/g, '""')}"` : v;
+  const csv = [header, ...rows].map(r => r.map(csvEscape).join(';')).join('\r\n');
+  const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `comptoir-catalogue-${new Date().toISOString().slice(0, 10)}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
 function productSalesStats(productId) {
   const orders = state.orders.filter(o => o.productId === productId);
   const sold = orders.filter(o => o.status !== 'retour');
@@ -1214,6 +1237,7 @@ function pageCatalogue() {
       <div><h1>Mon catalogue</h1><div class="sub">${fmtNum(state.products.length)} produit${state.products.length !== 1 ? 's' : ''}${missingCost ? ` · ${missingCost} sans prix d'achat` : ''}</div></div>
       <div class="topbar-actions">
         <button class="btn" data-action="importFromSite">Importer du site</button>
+        <button class="btn" data-action="exportCatalog">Exporter en CSV</button>
         <button class="btn" data-action="openImportCatalog">Importer un CSV</button>
         <button class="btn" data-action="openAddCatalogField">+ Colonne</button>
         <button class="btn primary" data-action="openAddProduct">+ Ajouter un produit</button>
@@ -1248,7 +1272,7 @@ function pageCatalogue() {
           }).join('')}
         </tbody>
       </table></div>` : `<div class="empty">${catalogFilterIncomplete ? 'Tout est déjà complet — aucun produit ne manque de prix d\'achat ou de fournisseur.' : 'Aucun produit — ajoutez-le manuellement, importez un fichier CSV, ou cliquez « Importer du site » si des ventes sont déjà arrivées.'}</div>`}
-      <div class="card-sub" style="margin-top:10px;">Le prix d'achat alimente le calcul de marge dans Comptabilité. « Vendu » et « CA généré » comptent vos commandes déjà reçues (hors retours) pour ce produit. « Importer du site » synchronise depuis les ventes déjà reçues par Comptoir — ce n'est pas une lecture en direct de votre site, seules les commandes déjà transmises via le connecteur y figurent. Ajoutez vos propres colonnes (référence, poids, couleur…) ou importez un fichier CSV pour remplir tout le catalogue d'un coup.</div>
+      <div class="card-sub" style="margin-top:10px;">Le prix d'achat alimente le calcul de marge dans Comptabilité. « Vendu » et « CA généré » comptent vos commandes déjà reçues (hors retours) pour ce produit. « Importer du site » synchronise depuis les ventes déjà reçues par Comptoir — ce n'est pas une lecture en direct de votre site, seules les commandes déjà transmises via le connecteur y figurent. Ajoutez vos propres colonnes (référence, poids, couleur…) ou importez un fichier CSV pour remplir tout le catalogue d'un coup. Vous pouvez aussi cliquer « Exporter en CSV », compléter les prix dans Excel, puis « Importer un CSV » pour renvoyer le fichier — les produits déjà présents (même nom) seront mis à jour, pas dupliqués.</div>
     </div>
   `;
 }
@@ -1924,6 +1948,7 @@ document.addEventListener('click', e => {
     return;
   }
   if (action === 'clearCatalogFilter') { catalogFilterIncomplete = false; render(); return; }
+  if (action === 'exportCatalog') { exportCatalogCSV(); return; }
 
   if (action === 'openImportCatalog') return openImportCatalogModal();
   if (action === 'submitCatalogImport') {
