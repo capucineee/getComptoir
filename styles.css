@@ -224,6 +224,8 @@ table.data td { padding: 11px 10px; border-bottom: 1px solid var(--rule-soft); f
 table.data td.amount { font-family: var(--font-mono); text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 table.data tbody tr:hover { background: var(--surface-sunken); }
 table.data tbody tr.row-click { cursor: pointer; }
+table.data tbody tr.row-incomplete { background: var(--warning-soft); }
+table.data tbody tr.row-incomplete:hover { filter: brightness(0.97); }
 .table-scroll { overflow-x: auto; }
 .field-remove { margin-left: 7px; color: var(--ink-faint); cursor: pointer; font-weight: 700; }
 .field-remove:hover { color: var(--critical); }
