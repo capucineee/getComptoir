@@ -1091,36 +1091,51 @@ function pickTickIndices(n, maxTicks) {
   for (let i = 0; i < maxTicks; i++) idx.push(Math.round(i * (n - 1) / (maxTicks - 1)));
   return [...new Set(idx)];
 }
+// Compact axis label (125k € instead of 125 000,00 €) — the full precision belongs in the
+// hover tooltip, which has room for it; the gridline label just needs to fit in ~50 SVG
+// units without spilling past the card's own padding.
+function fmtCompact(v, isCurrency) {
+  const abs = Math.abs(v);
+  let s;
+  if (abs >= 1000000) s = (v / 1000000).toLocaleString('fr-FR', { maximumFractionDigits: 1 }) + 'M';
+  else if (abs >= 1000) s = (v / 1000).toLocaleString('fr-FR', { maximumFractionDigits: 1 }) + 'k';
+  else s = v.toLocaleString('fr-FR', { maximumFractionDigits: 0 });
+  return isCurrency ? s + ' €' : s;
+}
 function trendChartSVG(series, granularity, idPrefix, valueKey) {
   const values = series.map(p => p[valueKey]);
   const minStep = valueKey === 'count' ? 1 : undefined;
   const { max: niceMaxV, ticks: tickValues } = niceAxis(Math.max(...values, 0), 4, minStep);
-  const w = 640, h = 220, marginL = 46, totalW = w + marginL;
-  const plotTop = 14, plotBottom = 190;
+  // Axis labels live INSIDE the 0..w viewBox (plotLeft reserves their space) rather than in
+  // negative coordinates outside it — a card only has ~20px of padding, far less than labels
+  // need, so anything drawn outside the box (even with overflow:visible) spills past the
+  // card's edge instead of sitting inside it.
+  const w = 640, h = 220, plotLeft = 46, plotTop = 14, plotBottom = 190;
+  const plotW = w - plotLeft;
   const coords = series.map((p, i) => {
-    const x = (i / (series.length - 1 || 1)) * w;
+    const x = plotLeft + (i / (series.length - 1 || 1)) * plotW;
     const y = plotBottom - (p[valueKey] / niceMaxV) * (plotBottom - plotTop);
     return { x, y, v: p[valueKey], t: p.t };
   });
   const line = coords.map(c => `${c.x},${c.y}`).join(' ');
-  const area = `0,${plotBottom} ${line} ${w},${plotBottom}`;
+  const area = `${plotLeft},${plotBottom} ${line} ${w},${plotBottom}`;
   const yTicks = tickValues.map(v => ({ y: plotBottom - (v / niceMaxV) * (plotBottom - plotTop), v }));
   const xTickIdx = pickTickIndices(coords.length, 6);
-  const formatY = valueKey === 'ca' ? (v => fmtEUR(Math.round(v))) : (v => fmtNum(Math.round(v)));
+  const formatY = v => fmtCompact(v, valueKey === 'ca');
   return { coords, svg: `
-    <svg id="${idPrefix}Svg" viewBox="${-marginL} 0 ${totalW} ${h}" preserveAspectRatio="none">
+    <svg id="${idPrefix}Svg" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">
       <defs><linearGradient id="${idPrefix}FillGrad" x1="0" y1="0" x2="0" y2="1">
         <stop offset="0%" stop-color="var(--brand)" stop-opacity="0.22"/>
         <stop offset="100%" stop-color="var(--brand)" stop-opacity="0"/>
       </linearGradient></defs>
-      ${yTicks.map(t => `<line x1="0" y1="${t.y}" x2="${w}" y2="${t.y}" stroke="var(--rule-soft)" stroke-width="1"/>`).join('')}
-      ${yTicks.map(t => `<text x="-8" y="${t.y + 3.5}" text-anchor="end" font-size="10" fill="var(--ink-faint)" font-family="var(--font-mono)">${formatY(t.v)}</text>`).join('')}
+      ${yTicks.map(t => `<line x1="${plotLeft}" y1="${t.y}" x2="${w}" y2="${t.y}" stroke="var(--rule-soft)" stroke-width="1"/>`).join('')}
+      ${yTicks.map(t => `<text x="${plotLeft - 8}" y="${t.y + 3.5}" text-anchor="end" font-size="10" fill="var(--ink-faint)" font-family="var(--font-mono)">${formatY(t.v)}</text>`).join('')}
       ${xTickIdx.map(i => `<text x="${coords[i].x}" y="${plotBottom + 15}" text-anchor="${i === 0 ? 'start' : i === coords.length - 1 ? 'end' : 'middle'}" font-size="10" fill="var(--ink-faint)" font-family="var(--font-mono)">${escapeHTML(bucketLabel(coords[i].t, granularity))}</text>`).join('')}
       <polygon fill="url(#${idPrefix}FillGrad)" points="${area}"/>
       <polyline fill="none" stroke="var(--brand)" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round" points="${line}"/>
       <circle id="${idPrefix}HoverDot" r="4" fill="var(--brand)" stroke="var(--surface)" stroke-width="2" style="opacity:0"/>
       <line id="${idPrefix}HoverLine" x1="0" y1="${plotTop}" x2="0" y2="${plotBottom}" stroke="var(--ink-faint)" stroke-width="1" stroke-dasharray="3,3" style="opacity:0"/>
-      <rect id="${idPrefix}HoverCatcher" x="0" y="0" width="${w}" height="${h}" fill="transparent"/>
+      <rect id="${idPrefix}HoverCatcher" x="${plotLeft}" y="0" width="${plotW}" height="${h}" fill="transparent"/>
     </svg>` };
 }
 function wireTrendChart(coords, granularity, idPrefix, formatValue) {
@@ -1131,16 +1146,16 @@ function wireTrendChart(coords, granularity, idPrefix, formatValue) {
   const hoverLine = document.getElementById(`${idPrefix}HoverLine`);
   const tooltip = document.getElementById(`${idPrefix}Tooltip`);
   const wrap = document.getElementById(`${idPrefix}Wrap`);
-  const w = 640, marginL = 46, totalW = w + marginL;
+  const w = 640;
   function nearest(xVal) { let best = coords[0]; for (const c of coords) if (Math.abs(c.x - xVal) < Math.abs(best.x - xVal)) best = c; return best; }
   catcher.addEventListener('mousemove', e => {
     const rect = svg.getBoundingClientRect();
-    const xVal = -marginL + ((e.clientX - rect.left) / rect.width) * totalW;
+    const xVal = ((e.clientX - rect.left) / rect.width) * w;
     const c = nearest(xVal);
     dot.setAttribute('cx', c.x); dot.setAttribute('cy', c.y); dot.style.opacity = 1;
     hoverLine.setAttribute('x1', c.x); hoverLine.setAttribute('x2', c.x); hoverLine.style.opacity = 1;
     const wrapRect = wrap.getBoundingClientRect();
-    tooltip.style.left = (((c.x + marginL) / totalW) * wrapRect.width) + 'px';
+    tooltip.style.left = ((c.x / w) * wrapRect.width) + 'px';
     tooltip.style.top = ((c.y / 220) * wrapRect.height) + 'px';
     tooltip.textContent = bucketLabel(c.t, granularity) + ' — ' + formatValue(c.v);
     tooltip.style.opacity = 1;
