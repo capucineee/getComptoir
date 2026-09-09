@@ -1012,6 +1012,24 @@ function expensesInRange(bounds) {
   });
   return rows.sort((a, b) => new Date(b.date) - new Date(a.date));
 }
+// Full charges history, grouped by month and by year — independent of the Comptabilité range
+// selector on purpose, since a "total charges over time" trend view only makes sense across
+// all of it, not just whatever 7/30/90-day window happens to be selected elsewhere on the page.
+function computeChargesTimeline() {
+  const today = new Date();
+  const monthMap = {}, yearMap = {};
+  state.expenses.forEach(e => {
+    expenseOccurrences(e, today).forEach(d => {
+      const mkey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+      const ykey = String(d.getFullYear());
+      monthMap[mkey] = (monthMap[mkey] || 0) + e.amount;
+      yearMap[ykey] = (yearMap[ykey] || 0) + e.amount;
+    });
+  });
+  const months = Object.entries(monthMap).sort((a, b) => a[0].localeCompare(b[0]));
+  const years = Object.entries(yearMap).sort((a, b) => a[0].localeCompare(b[0]));
+  return { months, years };
+}
 function computeAccounting(bounds) {
   const cur = ordersInRange(bounds).filter(o => o.status !== 'retour');
   const refunded = ordersInRange(bounds).filter(o => o.status === 'retour');
@@ -1839,6 +1857,7 @@ function pageFacturation() {
   `;
 }
 
+let chargesTimelineGranularity = 'month';
 /* ---------- page: paramètres ---------- */
 function pageComptabilite() {
   const bounds = getRangeBounds();
@@ -1847,6 +1866,9 @@ function pageComptabilite() {
   const todayISO = new Date().toISOString().slice(0, 10);
   const fallbackFrom = daysAgo(29).toISOString().slice(0, 10);
   const custom = state.rangeCustom || {};
+  const timeline = computeChargesTimeline();
+  const timelineRows = chargesTimelineGranularity === 'year' ? timeline.years : timeline.months;
+  const timelineMax = Math.max(...timelineRows.map(([, v]) => v), 1);
   return `
     <div class="topbar">
       <div><h1>Comptabilité</h1><div class="sub">Résumé simplifié — ne remplace pas votre comptable</div></div>
@@ -1911,6 +1933,23 @@ function pageComptabilite() {
         </tbody>
       </table></div>
       <div class="card-sub" style="margin-top:10px;">Total : ${fmtEUR(a.expensesTotal)} sur ${fmtNum(a.expenses.length)} charge${a.expenses.length !== 1 ? 's' : ''}</div>` : `<div class="empty">Aucune charge enregistrée sur cette période.</div>`}
+    </div>
+
+    <div class="card" style="margin-bottom:14px;">
+      <div class="card-head">
+        <div><h2>Charges totales par période</h2><div class="card-sub">Tout votre historique de charges — indépendant de la période choisie ci-dessus</div></div>
+        <div class="range">
+          ${[['month', 'Par mois'], ['year', 'Par année']].map(([g, label]) => `<button data-action="setChargesTimelineGranularity" data-granularity="${g}" class="${chargesTimelineGranularity === g ? 'active' : ''}">${label}</button>`).join('')}
+        </div>
+      </div>
+      ${timelineRows.length ? timelineRows.map(([key, amount]) => {
+        const label = chargesTimelineGranularity === 'year' ? key : new Date(Number(key.slice(0, 4)), Number(key.slice(5, 7)) - 1, 1).toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' });
+        const pct = Math.round((amount / timelineMax) * 100);
+        return `<div class="chan-row">
+          <div class="top"><span style="text-transform:capitalize;">${label}</span><span class="pct">${fmtEUR(amount)}</span></div>
+          <div class="chan-bar"><div style="width:${pct}%; background:var(--brand)"></div></div>
+        </div>`;
+      }).join('') : `<div class="empty">Aucune charge enregistrée pour l'instant.</div>`}
     </div>
 
     <div class="grid">
@@ -2448,6 +2487,7 @@ document.addEventListener('click', e => {
     persist(); render();
     return;
   }
+  if (action === 'setChargesTimelineGranularity') { chargesTimelineGranularity = el.dataset.granularity; render(); return; }
 
   if (action === 'openAddCustom') return openAddCustomModal();
   if (action === 'submitAddCustom') {
