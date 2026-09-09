@@ -1526,12 +1526,13 @@ function pageCatalogue() {
             const margin = hasMargin ? p.salePrice - p.costPrice : null;
             const marginPct = hasMargin ? (margin / p.salePrice * 100) : null;
             const stats = productSalesStats(p.id);
-            // Highlight only when NEITHER price is usefully filled in (costPrice defaults to
-            // 0 rather than null for new products, so a bare `!= null` check would miss it —
-            // treat 0 the same as unset here, for both fields).
-            const bothPricesMissing = !p.costPrice && !(p.salePrice > 0);
+            // Highlight whenever cost price is unfilled — it defaults to 0 rather than null
+            // for new products, so a bare `!= null` check would miss it; treat 0 as unset.
+            // Cost price alone drives this: it's what feeds the margin calc in Comptabilité,
+            // so a row missing it is worth flagging even if a resale price is already set.
+            const missingCostPrice = !p.costPrice;
             return `
-            <tr class="${bothPricesMissing ? 'row-incomplete' : ''}">
+            <tr class="${missingCostPrice ? 'row-incomplete' : ''}">
               <td>${escapeHTML(p.name)}</td>
               <td><input class="stock-input" type="text" value="${escapeHTML(p.supplier || '')}" data-supplier-id="${p.id}" placeholder="—"></td>
               <td class="amount"><input class="stock-input" type="number" min="0" step="0.01" value="${p.costPrice ?? 0}" data-cost-id="${p.id}"></td>
