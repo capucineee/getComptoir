@@ -20,6 +20,8 @@ import secrets
 import sqlite3
 import sys
 import threading
+import time
+import traceback
 import unicodedata
 import urllib.parse
 from datetime import datetime, timezone
@@ -148,10 +150,42 @@ def handle_signup(body):
     return {"token": token, "email": email}
 
 
+# Login has no other brute-force protection (no account lockout, no CAPTCHA), so a bare
+# password check would let anyone try passwords for a known email as fast as the network
+# allows. This is a simple in-memory sliding-window limiter keyed by email — good enough at
+# this stage's traffic; a shared store (e.g. Redis) is the natural upgrade once the app runs
+# across multiple processes/instances where in-memory state wouldn't be shared.
+LOGIN_ATTEMPTS = {}
+LOGIN_LOCK = threading.Lock()
+MAX_LOGIN_ATTEMPTS = 8
+LOGIN_WINDOW_SECONDS = 300  # 5 minutes
+
+
+def check_login_rate_limit(email):
+    now = time.time()
+    with LOGIN_LOCK:
+        attempts = [t for t in LOGIN_ATTEMPTS.get(email, []) if now - t < LOGIN_WINDOW_SECONDS]
+        LOGIN_ATTEMPTS[email] = attempts
+        return len(attempts) < MAX_LOGIN_ATTEMPTS
+
+
+def record_login_failure(email):
+    with LOGIN_LOCK:
+        LOGIN_ATTEMPTS.setdefault(email, []).append(time.time())
+
+
+def clear_login_failures(email):
+    with LOGIN_LOCK:
+        LOGIN_ATTEMPTS.pop(email, None)
+
+
 def handle_login(body):
     require_fields(body, ["email", "password"])
     email = body["email"].strip().lower()
     password = body["password"]
+
+    if not check_login_rate_limit(email):
+        raise ApiError(429, "Trop de tentatives — réessayez dans quelques minutes.")
 
     conn = get_db()
     row = conn.execute(
@@ -159,8 +193,10 @@ def handle_login(body):
     ).fetchone()
     conn.close()
     if not row or not verify_password(password, row["password_hash"], row["password_salt"]):
+        record_login_failure(email)
         raise ApiError(401, "Email ou mot de passe incorrect.")
 
+    clear_login_failures(email)
     token = create_session(row["id"])
     return {"token": token, "email": row["email"]}
 
@@ -550,6 +586,14 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     def end_headers(self):
         self.send_header("Cache-Control", "no-store, no-cache, must-revalidate")
         self.send_header("Pragma", "no-cache")
+        # Baseline hardening headers — cheap, safe defaults with no functional trade-off for
+        # this app. A real Content-Security-Policy is deliberately NOT added here: the UI
+        # relies on inline style="..." attributes throughout, so a CSP tight enough to matter
+        # needs to be worked out and tested against every page, not bolted on in one pass.
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Frame-Options", "DENY")
+        self.send_header("Referrer-Policy", "strict-origin-when-cross-origin")
+        self.send_header("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
         super().end_headers()
 
     def _bearer_token(self):
@@ -565,6 +609,13 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+    def _send_server_error(self, e):
+        # The exception text itself (stack traces, file paths, library internals) is never
+        # sent to the client — only logged server-side. An attacker probing the API for a
+        # 500 shouldn't learn anything about how it's built from the response body.
+        traceback.print_exc(file=sys.stderr)
+        self._send_json(500, {"error": "Erreur serveur — réessayez dans un instant."})
 
     def _read_json_body(self):
         length = int(self.headers.get("Content-Length", 0))
@@ -597,7 +648,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         except ApiError as e:
             self._send_json(e.status, {"error": e.message})
         except Exception as e:  # pragma: no cover
-            self._send_json(500, {"error": f"Erreur serveur : {e}"})
+            self._send_server_error(e)
 
     def do_GET(self):
         path = urllib.parse.urlparse(self.path).path
@@ -624,7 +675,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         except ApiError as e:
             self._send_json(e.status, {"error": e.message})
         except Exception as e:  # pragma: no cover
-            self._send_json(500, {"error": f"Erreur serveur : {e}"})
+            self._send_server_error(e)
 
     def do_DELETE(self):
         path = urllib.parse.urlparse(self.path).path
@@ -637,7 +688,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         except ApiError as e:
             self._send_json(e.status, {"error": e.message})
         except Exception as e:  # pragma: no cover
-            self._send_json(500, {"error": f"Erreur serveur : {e}"})
+            self._send_server_error(e)
 
     def log_message(self, fmt, *args):
         sys.stderr.write("%s - %s\n" % (self.address_string(), fmt % args))

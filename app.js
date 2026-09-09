@@ -1386,7 +1386,7 @@ function orderRow(o, withDate) {
   return `<tr>
     <td>#${o.orderNumber}</td>
     <td><span class="chan-dot"><span class="sw" style="background:${channelColor(o.channelType)}"></span>${connectorLabel(o.channelType)}</span></td>
-    <td>${o.customer}</td>
+    <td>${escapeHTML(o.customer)}</td>
     ${withDate ? `<td>${fmtDate(o.date)}</td>` : ''}
     <td class="amount">${fmtEUR(o.amount)}</td>
     <td><span class="status-chip ${cls}"><span class="dot"></span>${label}</span></td>
@@ -1453,7 +1453,7 @@ function ventesOrderRow(o) {
   return `<tr data-action="openOrderDetail" data-id="${o.id}" class="row-click" role="button" tabindex="0">
     <td>#${o.orderNumber}</td>
     <td><span class="chan-dot"><span class="sw" style="background:${channelColor(o.channelType)}"></span>${connectorLabel(o.channelType)}</span></td>
-    <td>${o.customer}</td>
+    <td>${escapeHTML(o.customer)}</td>
     <td>${fmtDate(o.date)}</td>
     <td class="amount">${fmtEUR(o.amount)}</td>
     <td><span class="status-chip ${cls}"><span class="dot"></span>${label}</span></td>
@@ -1513,7 +1513,15 @@ function exportCatalogCSV() {
     String(p.threshold ?? 0),
     ...state.catalogFields.map(f => p.custom[f.id] || '')
   ]);
-  const csvEscape = v => /[";\n]/.test(v) ? `"${String(v).replace(/"/g, '""')}"` : v;
+  const csvEscape = v => {
+    let s = String(v);
+    // Neutralize formula injection (CWE-1236): a cell starting with =, +, -, @, tab or CR
+    // is interpreted as a formula by Excel/Sheets when the file is opened — a customer or
+    // product name from an untrusted ingest payload could otherwise run arbitrary formulas
+    // (including OS command execution via legacy DDE) on whoever opens the export.
+    if (/^[=+\-@\t\r]/.test(s)) s = "'" + s;
+    return /[";\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  };
   const csv = [header, ...rows].map(r => r.map(csvEscape).join(';')).join('\r\n');
   const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' });
   const url = URL.createObjectURL(blob);
@@ -1724,8 +1732,8 @@ function pageSAV() {
     <tr data-action="openTicketDetail" data-id="${t.id}" class="row-click">
       <td>#${state.orders.find(o => o.id === t.orderId)?.orderNumber ?? t.orderNumber}</td>
       <td><span class="chan-dot"><span class="sw" style="background:${channelColor(t.channelType)}"></span>${connectorLabel(t.channelType)}</span></td>
-      <td>${t.product}</td>
-      <td>${t.reason}</td>
+      <td>${escapeHTML(t.product)}</td>
+      <td>${escapeHTML(t.reason)}</td>
       <td>${fmtDate(t.date)}</td>
       <td><span class="status-chip ${t.status === 'ouvert' ? 'warning' : 'good'}"><span class="dot"></span>${t.status === 'ouvert' ? 'Ouvert' : 'Résolu'}</span></td>
       ${state.savFields.map(f => `<td>${t.custom[f.id] ? escapeHTML(t.custom[f.id]) : '<span style="color:var(--ink-faint)">—</span>'}</td>`).join('')}
@@ -1995,7 +2003,15 @@ function exportAccountingCSV() {
       margin.toFixed(2)
     ];
   });
-  const csvEscape = v => /[";\n]/.test(v) ? `"${String(v).replace(/"/g, '""')}"` : v;
+  const csvEscape = v => {
+    let s = String(v);
+    // Neutralize formula injection (CWE-1236): a cell starting with =, +, -, @, tab or CR
+    // is interpreted as a formula by Excel/Sheets when the file is opened — a customer or
+    // product name from an untrusted ingest payload could otherwise run arbitrary formulas
+    // (including OS command execution via legacy DDE) on whoever opens the export.
+    if (/^[=+\-@\t\r]/.test(s)) s = "'" + s;
+    return /[";\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  };
   const summaryRows = [
     [],
     ['Charges'],
@@ -2209,7 +2225,7 @@ function openOrderDetailModal(orderId) {
     <h3>Commande #${o.orderNumber}</h3>
     <div class="modal-sub">${connectorLabel(o.channelType)} · ${fmtDateTime(o.date)}</div>
     <div class="detail-grid">
-      <div class="item"><div class="k">Cliente</div><div class="v">${o.customer}</div></div>
+      <div class="item"><div class="k">Cliente</div><div class="v">${escapeHTML(o.customer)}</div></div>
       <div class="item"><div class="k">Montant</div><div class="v">${fmtEUR(o.amount)}</div></div>
       <div class="item"><div class="k">Canal</div><div class="v"><span class="chan-dot"><span class="sw" style="background:${channelColor(o.channelType)}"></span>${connectorLabel(o.channelType)}</span></div></div>
       <div class="item"><div class="k">Statut</div><div class="v"><span class="status-chip ${cls}"><span class="dot"></span>${label}</span></div></div>
@@ -2243,16 +2259,16 @@ function openTicketDetailModal(ticketId) {
 
     <div class="detail-section-label">Coordonnées de la cliente</div>
     <div class="detail-grid">
-      <div class="item"><div class="k">Nom</div><div class="v">${contact ? contact.name : (customerName || '—')}</div></div>
-      <div class="item"><div class="k">Ville</div><div class="v">${contact ? contact.city : '—'}</div></div>
-      <div class="item"><div class="k">Email</div><div class="v">${contact ? `<a href="mailto:${contact.email}" style="color:var(--brand)">${contact.email}</a>` : '—'}</div></div>
-      <div class="item"><div class="k">Téléphone</div><div class="v">${contact ? contact.phone : '—'}</div></div>
+      <div class="item"><div class="k">Nom</div><div class="v">${escapeHTML(contact ? contact.name : (customerName || '—'))}</div></div>
+      <div class="item"><div class="k">Ville</div><div class="v">${escapeHTML(contact ? contact.city : '—')}</div></div>
+      <div class="item"><div class="k">Email</div><div class="v">${contact ? `<a href="mailto:${encodeURIComponent(contact.email)}" style="color:var(--brand)">${escapeHTML(contact.email)}</a>` : '—'}</div></div>
+      <div class="item"><div class="k">Téléphone</div><div class="v">${escapeHTML(contact ? contact.phone : '—')}</div></div>
     </div>
 
     <div class="detail-section-label">Détails</div>
     <div class="detail-grid">
-      <div class="item"><div class="k">Produit</div><div class="v">${t.product}</div></div>
-      <div class="item"><div class="k">Motif</div><div class="v">${t.reason}</div></div>
+      <div class="item"><div class="k">Produit</div><div class="v">${escapeHTML(t.product)}</div></div>
+      <div class="item"><div class="k">Motif</div><div class="v">${escapeHTML(t.reason)}</div></div>
       <div class="item"><div class="k">Canal</div><div class="v"><span class="chan-dot"><span class="sw" style="background:${channelColor(t.channelType)}"></span>${connectorLabel(t.channelType)}</span></div></div>
       <div class="item"><div class="k">Statut</div><div class="v"><span class="status-chip ${isOpen ? 'warning' : 'good'}"><span class="dot"></span>${isOpen ? 'Ouvert' : 'Résolu'}</span></div></div>
       ${order ? `<div class="item"><div class="k">Montant commande</div><div class="v">${fmtEUR(order.amount)}</div></div>` : ''}
