@@ -520,14 +520,15 @@ function renderLanding() {
         #landingRoot .l-hero-chart { position: absolute; right: -6%; top: 6%; width: 62%; height: 74%; z-index: 1; opacity: 0.9; pointer-events: none; }
         @media (max-width: 900px) { #landingRoot .l-hero-chart { opacity: 0.28; width: 100%; right: 0; } }
         #landingRoot .l-hero-chart .line { fill: none; stroke: var(--brand); stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; }
-        #landingRoot .l-hero-chart .area { fill: url(#landingHeroFill); opacity: 0; animation: landingAreaIn 1.2s ease-out 0.9s forwards; }
-        #landingRoot .l-hero-chart .dot { fill: var(--brand); opacity: 0; transform-box: fill-box; transform-origin: center; animation: landingDotIn 0.5s ease-out 1.7s forwards; }
-        @keyframes landingAreaIn { to { opacity: 1; } }
-        @keyframes landingDotIn { from { opacity: 0; transform: scale(0.4); } to { opacity: 1; transform: scale(1); } }
-        @media (prefers-reduced-motion: reduce) {
-          #landingRoot .l-hero-chart .line { stroke-dashoffset: 0 !important; transition: none !important; }
-          #landingRoot .l-hero-chart .area, #landingRoot .l-hero-chart .dot { animation: none !important; opacity: 1 !important; transform: none !important; }
+        #landingRoot .l-hero-chart .area { fill: url(#landingHeroFill); }
+        #landingRoot .l-hero-chart .dot { fill: var(--brand); }
+        @media (prefers-reduced-motion: no-preference) {
+          #landingRoot .l-hero-chart .line { stroke-dasharray: 900; stroke-dashoffset: 900; animation: landingDraw 1.6s ease forwards .2s; }
+          #landingRoot .l-hero-chart .area { opacity: 0; animation: landingFadeIn 1s ease forwards 1.1s; }
+          #landingRoot .l-hero-chart .dot { opacity: 0; animation: landingFadeIn .4s ease forwards 1.7s; }
         }
+        @keyframes landingDraw { to { stroke-dashoffset: 0; } }
+        @keyframes landingFadeIn { to { opacity: 1; } }
 
         #landingRoot .l-section-head { max-width: 580px; margin: 0 0 40px; }
         #landingRoot .l-section-eyebrow { font-family: var(--font-mono); font-size: 11.5px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--brand); margin-bottom: 10px; }
@@ -898,19 +899,6 @@ function renderLanding() {
       </footer>
     </div>
   `;
-  // Draws the hero background line in from left to right on load, instead of the static
-  // shape that was there before — stroke-dashoffset needs the path's real length, which
-  // only getTotalLength() gives reliably (hand-measuring the polyline's points would drift
-  // the moment its coordinates change).
-  const heroLine = document.querySelector('#landingRoot .l-hero-chart .line');
-  if (heroLine && !window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
-    const len = heroLine.getTotalLength();
-    heroLine.style.strokeDasharray = String(len);
-    heroLine.style.strokeDashoffset = String(len);
-    heroLine.getBoundingClientRect();
-    heroLine.style.transition = 'stroke-dashoffset 1.6s cubic-bezier(0.16, 1, 0.3, 1) 0.15s';
-    requestAnimationFrame(() => { heroLine.style.strokeDashoffset = '0'; });
-  }
 }
 
 function renderAuth(mode) {
