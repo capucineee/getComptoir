@@ -209,6 +209,8 @@ function seedData() {
     theme: null,
     accent: 'teal',
     range: '30',
+    rangeCustom: null,
+    overviewGranularity: 'day',
     connectors,
     products,
     orders,
@@ -234,6 +236,8 @@ function emptyState() {
     theme: null,
     accent: 'teal',
     range: '30',
+    rangeCustom: null,
+    overviewGranularity: 'day',
     connectors: [],
     products: [],
     orders: [],
@@ -271,6 +275,8 @@ function migrateState(s) {
   s.billingHistory = s.billingHistory || [];
   s.plan = s.plan || { tier: 'decouverte', renewsAt: isoDaysAgo(-30) };
   s.range = s.range || '30';
+  s.rangeCustom = s.rangeCustom || null;
+  s.overviewGranularity = s.overviewGranularity || 'day';
   s.theme = s.theme ?? null;
   s.customFields = s.customFields || [];
   s.customFields.forEach(f => { f.source = f.source || 'manual'; });
@@ -860,14 +866,35 @@ function connectorLabel(type) {
 function channelColor(type) { return CHANNEL_META[type] ? CHANNEL_META[type].color : 'var(--ink-faint)'; }
 
 /* ---------- KPI computation ---------- */
-function ordersInRange(days) {
-  const from = daysAgo(days).getTime();
-  return state.orders.filter(o => new Date(o.date).getTime() >= from);
+// A range is always resolved to explicit {from, to} Date bounds (inclusive) before use —
+// this is what lets a preset ('7'/'30'/'90') and a custom date-to-date pick share every
+// downstream computation (KPIs, charts, accounting) without those needing to know which
+// kind of range produced them.
+function getRangeBounds() {
+  if (state.range === 'custom' && state.rangeCustom && state.rangeCustom.from && state.rangeCustom.to) {
+    const from = new Date(state.rangeCustom.from + 'T00:00:00');
+    const to = new Date(state.rangeCustom.to + 'T23:59:59.999');
+    if (!isNaN(from) && !isNaN(to) && from <= to) return { from, to };
+  }
+  const days = Number(state.range) || 30;
+  return { from: daysAgo(days), to: new Date() };
 }
-function computeKPIs(days) {
-  const cur = ordersInRange(days);
-  const prevFrom = daysAgo(days * 2).getTime();
-  const prevTo = daysAgo(days).getTime();
+function rangeDayCount(bounds) {
+  return Math.max(1, Math.round((bounds.to.getTime() - bounds.from.getTime()) / 86400000));
+}
+function rangeLabel(bounds) {
+  if (state.range === 'custom') return `du ${fmtDate(bounds.from.toISOString())} au ${fmtDate(bounds.to.toISOString())}`;
+  return `${rangeDayCount(bounds)} derniers jours`;
+}
+function ordersInRange(bounds) {
+  const from = bounds.from.getTime(), to = bounds.to.getTime();
+  return state.orders.filter(o => { const t = new Date(o.date).getTime(); return t >= from && t <= to; });
+}
+function computeKPIs(bounds) {
+  const cur = ordersInRange(bounds);
+  const span = bounds.to.getTime() - bounds.from.getTime();
+  const prevFrom = bounds.from.getTime() - span;
+  const prevTo = bounds.from.getTime();
   const prev = state.orders.filter(o => { const t = new Date(o.date).getTime(); return t >= prevFrom && t < prevTo; });
 
   const ca = cur.reduce((s, o) => s + o.amount, 0);
@@ -890,22 +917,53 @@ function computeKPIs(days) {
     tauxRetour, tauxRetourDelta: Math.round((tauxRetour - tauxRetourPrev) * 10) / 10
   };
 }
-function trendSeries(days) {
-  const cur = ordersInRange(days);
-  const buckets = days <= 30 ? days : Math.round(days / 3);
-  const bucketSizeMs = (days * 86400000) / buckets;
-  const start = daysAgo(days).getTime();
-  const arr = Array.from({ length: buckets }, (_, i) => ({ t: start + i * bucketSizeMs, ca: 0 }));
-  cur.forEach(o => {
-    const t = new Date(o.date).getTime();
-    let idx = Math.floor((t - start) / bucketSizeMs);
-    idx = clamp(idx, 0, buckets - 1);
-    arr[idx].ca += o.amount;
-  });
-  return arr;
+// Buckets a date into a granularity-aligned key: a calendar day, an ISO (Monday-start)
+// week, or a calendar month — so "par semaine" / "par mois" reads as real weeks/months,
+// not arbitrary N-day slices.
+function bucketStart(date, granularity) {
+  const d = new Date(date);
+  d.setHours(0, 0, 0, 0);
+  if (granularity === 'month') { d.setDate(1); return d; }
+  if (granularity === 'week') { const dow = (d.getDay() + 6) % 7; d.setDate(d.getDate() - dow); return d; }
+  return d;
 }
-function channelBreakdown(days) {
-  const cur = ordersInRange(days);
+function bucketKey(date, granularity) { return bucketStart(date, granularity).getTime(); }
+function stepBucket(d, granularity) {
+  const next = new Date(d);
+  if (granularity === 'month') next.setMonth(next.getMonth() + 1);
+  else if (granularity === 'week') next.setDate(next.getDate() + 7);
+  else next.setDate(next.getDate() + 1);
+  return next;
+}
+function bucketLabel(t, granularity) {
+  const d = new Date(t);
+  if (granularity === 'month') return d.toLocaleDateString('fr-FR', { month: 'short', year: 'numeric' });
+  if (granularity === 'week') { const end = new Date(d); end.setDate(d.getDate() + 6); return `Sem. du ${d.toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit' })}`; }
+  return d.toLocaleDateString('fr-FR', { day: '2-digit', month: 'short' });
+}
+function trendSeries(bounds, granularity) {
+  const cur = ordersInRange(bounds);
+  const keys = [];
+  let cursor = bucketStart(bounds.from, granularity);
+  let guard = 0;
+  while (cursor.getTime() <= bounds.to.getTime() && guard < 400) {
+    keys.push(cursor.getTime());
+    cursor = stepBucket(cursor, granularity);
+    guard++;
+  }
+  if (!keys.length) keys.push(bucketStart(bounds.from, granularity).getTime());
+  const map = {};
+  keys.forEach(t => { map[t] = { t, ca: 0, count: 0 }; });
+  cur.forEach(o => {
+    const key = bucketKey(new Date(o.date), granularity);
+    if (!map[key]) return;
+    map[key].ca += o.amount;
+    map[key].count += 1;
+  });
+  return keys.map(t => map[t]);
+}
+function channelBreakdown(bounds) {
+  const cur = ordersInRange(bounds);
   const total = cur.reduce((s, o) => s + o.amount, 0) || 1;
   const byType = {};
   cur.forEach(o => { byType[o.channelType] = (byType[o.channelType] || 0) + o.amount; });
@@ -915,9 +973,9 @@ function channelBreakdown(days) {
 }
 const VAT_RATE = 0.20;
 function orderProduct(o) { return state.products.find(p => p.id === o.productId) || null; }
-function computeAccounting(days) {
-  const cur = ordersInRange(days).filter(o => o.status !== 'retour');
-  const refunded = ordersInRange(days).filter(o => o.status === 'retour');
+function computeAccounting(bounds) {
+  const cur = ordersInRange(bounds).filter(o => o.status !== 'retour');
+  const refunded = ordersInRange(bounds).filter(o => o.status === 'retour');
   const ttc = cur.reduce((s, o) => s + o.amount, 0);
   const ht = ttc / (1 + VAT_RATE);
   const tva = ttc - ht;
@@ -951,41 +1009,41 @@ function sparkline(points, color) {
     <circle cx="${last[0]}" cy="${last[1]}" r="2.4" fill="${color}"/>
   </svg>`;
 }
-function trendChartSVG(series) {
-  const values = series.map(p => p.ca);
+function trendChartSVG(series, granularity, idPrefix, valueKey) {
+  const values = series.map(p => p[valueKey]);
   const max = Math.max(...values, 1), min = Math.min(...values, 0);
   const w = 640, h = 220;
   const coords = series.map((p, i) => {
     const x = (i / (series.length - 1 || 1)) * w;
-    const y = 195 - ((p.ca - min) / (max - min || 1)) * 165;
-    return { x, y, ca: p.ca, t: p.t };
+    const y = 195 - ((p[valueKey] - min) / (max - min || 1)) * 165;
+    return { x, y, v: p[valueKey], t: p.t };
   });
   const line = coords.map(c => `${c.x},${c.y}`).join(' ');
   const area = `0,220 ${line} ${w},220`;
   return { coords, svg: `
-    <svg id="trendSvg" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">
-      <defs><linearGradient id="fillGrad" x1="0" y1="0" x2="0" y2="1">
+    <svg id="${idPrefix}Svg" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">
+      <defs><linearGradient id="${idPrefix}FillGrad" x1="0" y1="0" x2="0" y2="1">
         <stop offset="0%" stop-color="var(--brand)" stop-opacity="0.22"/>
         <stop offset="100%" stop-color="var(--brand)" stop-opacity="0"/>
       </linearGradient></defs>
       <line x1="0" y1="55" x2="${w}" y2="55" stroke="var(--rule-soft)" stroke-width="1"/>
       <line x1="0" y1="110" x2="${w}" y2="110" stroke="var(--rule-soft)" stroke-width="1"/>
       <line x1="0" y1="165" x2="${w}" y2="165" stroke="var(--rule-soft)" stroke-width="1"/>
-      <polygon fill="url(#fillGrad)" points="${area}"/>
+      <polygon fill="url(#${idPrefix}FillGrad)" points="${area}"/>
       <polyline fill="none" stroke="var(--brand)" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round" points="${line}"/>
-      <circle id="hoverDot" r="4" fill="var(--brand)" stroke="var(--surface)" stroke-width="2" style="opacity:0"/>
-      <line id="hoverLine" x1="0" y1="0" x2="0" y2="${h}" stroke="var(--ink-faint)" stroke-width="1" stroke-dasharray="3,3" style="opacity:0"/>
-      <rect id="hoverCatcher" x="0" y="0" width="${w}" height="${h}" fill="transparent"/>
+      <circle id="${idPrefix}HoverDot" r="4" fill="var(--brand)" stroke="var(--surface)" stroke-width="2" style="opacity:0"/>
+      <line id="${idPrefix}HoverLine" x1="0" y1="0" x2="0" y2="${h}" stroke="var(--ink-faint)" stroke-width="1" stroke-dasharray="3,3" style="opacity:0"/>
+      <rect id="${idPrefix}HoverCatcher" x="0" y="0" width="${w}" height="${h}" fill="transparent"/>
     </svg>` };
 }
-function wireTrendChart(coords) {
-  const svg = document.getElementById('trendSvg');
+function wireTrendChart(coords, granularity, idPrefix, formatValue) {
+  const svg = document.getElementById(`${idPrefix}Svg`);
   if (!svg) return;
-  const catcher = document.getElementById('hoverCatcher');
-  const dot = document.getElementById('hoverDot');
-  const hoverLine = document.getElementById('hoverLine');
-  const tooltip = document.getElementById('tooltip');
-  const wrap = document.getElementById('chartWrap');
+  const catcher = document.getElementById(`${idPrefix}HoverCatcher`);
+  const dot = document.getElementById(`${idPrefix}HoverDot`);
+  const hoverLine = document.getElementById(`${idPrefix}HoverLine`);
+  const tooltip = document.getElementById(`${idPrefix}Tooltip`);
+  const wrap = document.getElementById(`${idPrefix}Wrap`);
   function nearest(xVal) { let best = coords[0]; for (const c of coords) if (Math.abs(c.x - xVal) < Math.abs(best.x - xVal)) best = c; return best; }
   catcher.addEventListener('mousemove', e => {
     const rect = svg.getBoundingClientRect();
@@ -996,7 +1054,7 @@ function wireTrendChart(coords) {
     const wrapRect = wrap.getBoundingClientRect();
     tooltip.style.left = ((c.x / 640) * wrapRect.width) + 'px';
     tooltip.style.top = ((c.y / 220) * wrapRect.height) + 'px';
-    tooltip.textContent = fmtDate(new Date(c.t).toISOString()) + ' — ' + fmtEUR(c.ca);
+    tooltip.textContent = bucketLabel(c.t, granularity) + ' — ' + formatValue(c.v);
     tooltip.style.opacity = 1;
   });
   catcher.addEventListener('mouseleave', () => { dot.style.opacity = 0; hoverLine.style.opacity = 0; tooltip.style.opacity = 0; });
@@ -1004,13 +1062,18 @@ function wireTrendChart(coords) {
 
 /* ---------- page: overview ---------- */
 function pageOverview() {
-  const days = Number(state.range);
-  const k = computeKPIs(days);
-  const series = trendSeries(days);
-  const chart = trendChartSVG(series);
-  const breakdown = channelBreakdown(days);
+  const bounds = getRangeBounds();
+  const granularity = state.overviewGranularity;
+  const k = computeKPIs(bounds);
+  const series = trendSeries(bounds, granularity);
+  const caChart = trendChartSVG(series, granularity, 'ca', 'ca');
+  const cntChart = trendChartSVG(series, granularity, 'cnt', 'count');
+  const breakdown = channelBreakdown(bounds);
   const alerts = stockAlerts();
   const recent = state.orders.slice(0, 6);
+  const todayISO = new Date().toISOString().slice(0, 10);
+  const fallbackFrom = daysAgo(29).toISOString().slice(0, 10);
+  const custom = state.rangeCustom || {};
 
   return `
     <div class="topbar">
@@ -1018,6 +1081,16 @@ function pageOverview() {
       <div class="topbar-actions">
         <div class="range">
           ${['7', '30', '90'].map(d => `<button data-action="setRange" data-range="${d}" class="${state.range === d ? 'active' : ''}">${d} j</button>`).join('')}
+          <button data-action="setRange" data-range="custom" class="${state.range === 'custom' ? 'active' : ''}">Personnalisé</button>
+        </div>
+        ${state.range === 'custom' ? `
+        <div style="display:flex; align-items:center; gap:6px;">
+          <input type="date" id="rangeFromInput" class="stock-input" style="width:auto;" value="${custom.from || fallbackFrom}" max="${todayISO}">
+          <span style="color:var(--ink-faint); font-size:12.5px;">→</span>
+          <input type="date" id="rangeToInput" class="stock-input" style="width:auto;" value="${custom.to || todayISO}" max="${todayISO}">
+        </div>` : ''}
+        <div class="range">
+          ${[['day', 'Jour'], ['week', 'Semaine'], ['month', 'Mois']].map(([g, label]) => `<button data-action="setGranularity" data-granularity="${g}" class="${granularity === g ? 'active' : ''}">${label}</button>`).join('')}
         </div>
         ${themeToggleHTML()}
       </div>
@@ -1032,9 +1105,9 @@ function pageOverview() {
 
     <div class="grid">
       <div class="card">
-        <h2>Chiffre d'affaires — ${days} derniers jours</h2>
+        <h2>Chiffre d'affaires — ${rangeLabel(bounds)}</h2>
         <div class="card-sub">Tous canaux confondus</div>
-        <div class="chart-wrap" id="chartWrap">${chart.svg}<div class="tooltip" id="tooltip"></div></div>
+        <div class="chart-wrap" id="caWrap">${caChart.svg}<div class="tooltip" id="caTooltip"></div></div>
       </div>
       <div class="card">
         <h2>Répartition par canal</h2>
@@ -1045,6 +1118,12 @@ function pageOverview() {
             <div class="chan-bar"><div style="width:${b.pct}%; background:${channelColor(b.type)}"></div></div>
           </div>`).join('') : `<div class="empty">Aucune vente sur cette période.</div>`}
       </div>
+    </div>
+
+    <div class="card" style="margin-bottom:14px;">
+      <h2>Nombre de ventes — ${rangeLabel(bounds)}</h2>
+      <div class="card-sub">Commandes reçues, tous canaux confondus</div>
+      <div class="chart-wrap" id="cntWrap">${cntChart.svg}<div class="tooltip" id="cntTooltip"></div></div>
     </div>
 
     <div class="grid">
@@ -1506,16 +1585,26 @@ function pageFacturation() {
 
 /* ---------- page: paramètres ---------- */
 function pageComptabilite() {
-  const days = Number(state.range);
-  const a = computeAccounting(days);
+  const bounds = getRangeBounds();
+  const a = computeAccounting(bounds);
   const missingCost = state.products.filter(p => !p.costPrice).length;
+  const todayISO = new Date().toISOString().slice(0, 10);
+  const fallbackFrom = daysAgo(29).toISOString().slice(0, 10);
+  const custom = state.rangeCustom || {};
   return `
     <div class="topbar">
       <div><h1>Comptabilité</h1><div class="sub">Résumé simplifié — ne remplace pas votre comptable</div></div>
       <div class="topbar-actions">
         <div class="range">
           ${['7', '30', '90'].map(d => `<button data-action="setRange" data-range="${d}" class="${state.range === d ? 'active' : ''}">${d} j</button>`).join('')}
+          <button data-action="setRange" data-range="custom" class="${state.range === 'custom' ? 'active' : ''}">Personnalisé</button>
         </div>
+        ${state.range === 'custom' ? `
+        <div style="display:flex; align-items:center; gap:6px;">
+          <input type="date" id="rangeFromInput" class="stock-input" style="width:auto;" value="${custom.from || fallbackFrom}" max="${todayISO}">
+          <span style="color:var(--ink-faint); font-size:12.5px;">→</span>
+          <input type="date" id="rangeToInput" class="stock-input" style="width:auto;" value="${custom.to || todayISO}" max="${todayISO}">
+        </div>` : ''}
         ${themeToggleHTML()}
       </div>
     </div>
@@ -1543,16 +1632,17 @@ function pageComptabilite() {
         <div class="card-sub">Un fichier CSV prêt pour votre comptable ou votre logiciel de compta.</div>
         <ul class="plain" style="margin-top:6px;">
           <li>Une ligne par commande, avec montant TTC, HT, TVA, coût et marge</li>
-          <li>Période sélectionnée : ${days} derniers jours (${a.orders.length} commandes)</li>
+          <li>Période sélectionnée : ${rangeLabel(bounds)} (${a.orders.length} commandes)</li>
         </ul>
-        <button class="btn primary" data-action="exportAccounting" data-days="${days}" style="margin-top:8px;">Télécharger l'export (CSV)</button>
+        <button class="btn primary" data-action="exportAccounting" style="margin-top:8px;">Télécharger l'export (CSV)</button>
       </div>
     </div>
   `;
 }
 
-function exportAccountingCSV(days) {
-  const a = computeAccounting(days);
+function exportAccountingCSV() {
+  const bounds = getRangeBounds();
+  const a = computeAccounting(bounds);
   const header = ['Date', 'Commande', 'Canal', 'Cliente', 'Statut', 'Montant TTC', 'Montant HT', 'TVA', "Coût d'achat", 'Marge'];
   const rows = a.orders.map(o => {
     const p = orderProduct(o);
@@ -1580,7 +1670,8 @@ function exportAccountingCSV(days) {
   const url = URL.createObjectURL(blob);
   const a2 = document.createElement('a');
   a2.href = url;
-  a2.download = `comptoir-export-comptable-${days}j-${new Date().toISOString().slice(0, 10)}.csv`;
+  const rangeTag = state.range === 'custom' ? `${(state.rangeCustom && state.rangeCustom.from) || 'debut'}_${(state.rangeCustom && state.rangeCustom.to) || 'fin'}` : `${rangeDayCount(bounds)}j`;
+  a2.download = `comptoir-export-comptable-${rangeTag}-${new Date().toISOString().slice(0, 10)}.csv`;
   document.body.appendChild(a2);
   a2.click();
   a2.remove();
@@ -1647,8 +1738,11 @@ function render() {
   const pages = { '': pageOverview, 'ventes': pageVentes, 'stock': pageStock, 'catalogue': pageCatalogue, 'sav': pageSAV, 'connecteurs': pageConnecteurs, 'facturation': pageFacturation, 'comptabilite': pageComptabilite, 'parametres': pageParametres };
   main.innerHTML = (pages[path] || pageOverview)();
   if (path === '') {
-    const days = Number(state.range);
-    wireTrendChart(trendChartSVG(trendSeries(days)).coords);
+    const bounds = getRangeBounds();
+    const granularity = state.overviewGranularity;
+    const series = trendSeries(bounds, granularity);
+    wireTrendChart(trendChartSVG(series, granularity, 'ca', 'ca').coords, granularity, 'ca', fmtEUR);
+    wireTrendChart(trendChartSVG(series, granularity, 'cnt', 'count').coords, granularity, 'cnt', v => `${fmtNum(v)} vente${v !== 1 ? 's' : ''}`);
   }
 }
 
@@ -1863,9 +1957,17 @@ document.addEventListener('click', e => {
     toast(`Couleur d'accent : ${ACCENTS[state.accent].label}.`);
     return;
   }
-  if (action === 'setRange') { setState({ range: el.dataset.range }); return; }
+  if (action === 'setRange') {
+    if (el.dataset.range === 'custom' && (!state.rangeCustom || !state.rangeCustom.from || !state.rangeCustom.to)) {
+      const todayISO = new Date().toISOString().slice(0, 10);
+      state.rangeCustom = { from: (state.rangeCustom && state.rangeCustom.from) || daysAgo(29).toISOString().slice(0, 10), to: (state.rangeCustom && state.rangeCustom.to) || todayISO };
+    }
+    setState({ range: el.dataset.range });
+    return;
+  }
+  if (action === 'setGranularity') { setState({ overviewGranularity: el.dataset.granularity }); return; }
   if (action === 'exportAccounting') {
-    exportAccountingCSV(Number(el.dataset.days));
+    exportAccountingCSV();
     toast('Export téléchargé.');
     return;
   }
@@ -2214,6 +2316,8 @@ document.addEventListener('input', e => {
 document.addEventListener('change', e => {
   if (e.target.id === 'salesChannel') { salesFilter.channel = e.target.value; render(); }
   if (e.target.id === 'salesStatus') { salesFilter.status = e.target.value; render(); }
+  if (e.target.id === 'rangeFromInput') { state.rangeCustom = { ...(state.rangeCustom || {}), from: e.target.value }; setState({ range: 'custom' }); }
+  if (e.target.id === 'rangeToInput') { state.rangeCustom = { ...(state.rangeCustom || {}), to: e.target.value }; setState({ range: 'custom' }); }
 });
 function renderKeepFocus(id) {
   const pos = document.getElementById(id)?.selectionStart;
