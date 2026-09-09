@@ -442,9 +442,27 @@ def handle_ingest_order(api_key, body):
 
         product_id = None
         if product_name:
-            match = next((p for p in data.get("products", []) if p.get("name", "").strip().lower() == product_name.lower()), None)
+            products = data.setdefault("products", [])
+            match = next((p for p in products if p.get("name", "").strip().lower() == product_name.lower()), None)
             if match:
                 product_id = match["id"]
+            else:
+                # Unknown product on a real sale — create it rather than silently losing the
+                # link. Stock is never guessed: it starts at 0, flagged for the merchant to
+                # fill in for real, same as cost price and supplier.
+                new_product = {
+                    "id": secrets.token_hex(8),
+                    "name": product_name,
+                    "stock": 0,
+                    "threshold": 10,
+                    "costPrice": 0,
+                    "salePrice": None,
+                    "supplier": "",
+                    "custom": {},
+                    "channels": [],
+                }
+                products.append(new_product)
+                product_id = new_product["id"]
 
         next_number = max([o.get("orderNumber", 0) for o in orders], default=1000) + 1
         order = {

@@ -261,6 +261,13 @@ function loadLocalCache() {
   return null;
 }
 function migrateState(s) {
+  // Defensive: every collection defaults to empty before anything iterates over it — a
+  // state blob missing a field (an older shape, a hand-built test payload, a partial PUT)
+  // must degrade gracefully here rather than throw and force a fall-back to stale local data.
+  s.orders = s.orders || [];
+  s.products = s.products || [];
+  s.connectors = s.connectors || [];
+  s.savTickets = s.savTickets || [];
   s.customFields = s.customFields || [];
   s.customFields.forEach(f => { f.source = f.source || 'manual'; });
   s.orders.forEach(o => { o.custom = o.custom || {}; });
@@ -275,6 +282,7 @@ function migrateState(s) {
     if (p.salePrice == null) p.salePrice = null;
     if (p.supplier == null) p.supplier = '';
     p.custom = p.custom || {};
+    p.channels = p.channels || [];
   });
   const byChannel = type => s.products.filter(p => p.channels.includes(type));
   s.orders.forEach(o => {
@@ -1186,26 +1194,31 @@ const CATALOG_TARGET_FIELDS = [
   { key: 'stock', label: 'Stock' },
   { key: 'threshold', label: "Seuil d'alerte" },
 ];
+let catalogFilterIncomplete = false;
 function pageCatalogue() {
   const missingCost = state.products.filter(p => !p.costPrice).length;
+  const incomplete = state.products.filter(p => !p.costPrice || !p.supplier);
+  const shown = catalogFilterIncomplete ? incomplete : state.products;
   return `
     <div class="topbar">
       <div><h1>Mon catalogue</h1><div class="sub">${fmtNum(state.products.length)} produit${state.products.length !== 1 ? 's' : ''}${missingCost ? ` · ${missingCost} sans prix d'achat` : ''}</div></div>
       <div class="topbar-actions">
+        <button class="btn" data-action="importFromSite">Importer du site</button>
         <button class="btn" data-action="openImportCatalog">Importer un CSV</button>
         <button class="btn" data-action="openAddCatalogField">+ Colonne</button>
         <button class="btn primary" data-action="openAddProduct">+ Ajouter un produit</button>
         ${themeToggleHTML()}
       </div>
     </div>
+    ${catalogFilterIncomplete ? `<div class="callout" style="margin-bottom:14px;">Affichage filtré : ${fmtNum(incomplete.length)} produit${incomplete.length !== 1 ? 's' : ''} sans prix d'achat ou sans fournisseur. <span class="copy" data-action="clearCatalogFilter">Voir tout le catalogue</span></div>` : ''}
     <div class="card">
-      ${state.products.length ? `<div class="table-scroll"><table class="data">
+      ${shown.length ? `<div class="table-scroll"><table class="data">
         <thead><tr>
           <th>Produit</th><th>Fournisseur</th><th>Prix d'achat</th><th>Prix de revente</th><th>Marge</th>
           ${state.catalogFields.map(f => `<th>${escapeHTML(f.label)}<span class="field-remove" data-action="removeCatalogField" data-id="${f.id}" title="Retirer cette colonne">×</span></th>`).join('')}
         </tr></thead>
         <tbody>
-          ${state.products.map(p => {
+          ${shown.map(p => {
             const hasMargin = p.salePrice != null && p.costPrice != null;
             const margin = hasMargin ? p.salePrice - p.costPrice : null;
             const marginPct = hasMargin && p.salePrice ? (margin / p.salePrice * 100) : null;
@@ -1220,8 +1233,8 @@ function pageCatalogue() {
             </tr>`;
           }).join('')}
         </tbody>
-      </table></div>` : `<div class="empty">Aucun produit — ajoutez-le manuellement ou importez un fichier CSV.</div>`}
-      <div class="card-sub" style="margin-top:10px;">Le prix d'achat alimente le calcul de marge dans Comptabilité. Ajoutez vos propres colonnes (référence, poids, couleur…) ou importez un fichier CSV pour remplir tout le catalogue d'un coup.</div>
+      </table></div>` : `<div class="empty">${catalogFilterIncomplete ? 'Tout est déjà complet — aucun produit ne manque de prix d\'achat ou de fournisseur.' : 'Aucun produit — ajoutez-le manuellement, importez un fichier CSV, ou cliquez « Importer du site » si des ventes sont déjà arrivées.'}</div>`}
+      <div class="card-sub" style="margin-top:10px;">Le prix d'achat alimente le calcul de marge dans Comptabilité. « Importer du site » récupère les produits déjà présents dans vos ventes ; ajoutez vos propres colonnes (référence, poids, couleur…) ou importez un fichier CSV pour remplir tout le catalogue d'un coup.</div>
     </div>
   `;
 }
@@ -1866,6 +1879,23 @@ document.addEventListener('click', e => {
     persist(); closeModal(); render(); toast(`« ${name} » ajouté au suivi de stock.`);
     return;
   }
+
+  if (action === 'importFromSite') {
+    const known = new Set(state.products.map(p => p.id));
+    const orphanOrders = state.orders.filter(o => !o.productId || !known.has(o.productId));
+    const incomplete = state.products.filter(p => !p.costPrice || !p.supplier).length;
+    catalogFilterIncomplete = incomplete > 0;
+    render();
+    if (state.products.length === 0 && orphanOrders.length === 0) {
+      toast('Aucune vente enregistrée pour l\'instant — le catalogue se remplira automatiquement dès les premières commandes.', true);
+    } else if (incomplete > 0) {
+      toast(`${fmtNum(state.products.length)} produit${state.products.length !== 1 ? 's' : ''} distinct${state.products.length !== 1 ? 's' : ''} depuis vos ventes — ${incomplete} à compléter (prix d'achat / fournisseur).`);
+    } else {
+      toast(`${fmtNum(state.products.length)} produit${state.products.length !== 1 ? 's' : ''} distinct${state.products.length !== 1 ? 's' : ''} depuis vos ventes, tous déjà complets.`);
+    }
+    return;
+  }
+  if (action === 'clearCatalogFilter') { catalogFilterIncomplete = false; render(); return; }
 
   if (action === 'openImportCatalog') return openImportCatalogModal();
   if (action === 'submitCatalogImport') {
