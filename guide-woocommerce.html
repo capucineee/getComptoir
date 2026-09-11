@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Guide de connexion — WooCommerce — Comptoir</title>
+<link rel="stylesheet" href="styles.css">
+<style>
+  body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--font); line-height: 1.6; }
+  .topbar {
+    position: sticky; top: 0; z-index: 10; display: flex; align-items: center; gap: 10px;
+    padding: 14px 24px; background: var(--surface); border-bottom: 1px solid var(--rule-soft);
+  }
+  .topbar svg { width: 24px; height: 24px; flex-shrink: 0; }
+  .topbar .name { font-weight: 700; font-size: 15px; }
+  .topbar .tag { color: var(--ink-faint); font-size: 13px; margin-left: 2px; }
+  .topbar .back { margin-left: auto; }
+
+  .wrap { max-width: 760px; margin: 0 auto; padding: 48px 24px 96px; }
+  .eyebrow {
+    display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 600;
+    letter-spacing: 0.04em; text-transform: uppercase; color: var(--brand); background: var(--brand-soft);
+    padding: 5px 11px; border-radius: 100px; margin-bottom: 18px;
+  }
+  h1 { font-size: 30px; font-weight: 700; margin: 0 0 12px; letter-spacing: -0.01em; }
+  .lede { font-size: 16px; color: var(--ink-soft); margin: 0 0 36px; max-width: 58ch; }
+
+  .card { background: var(--surface); border: 1px solid var(--rule-soft); border-radius: 14px; padding: 24px 26px; margin-bottom: 22px; }
+  .step { display: flex; gap: 16px; margin-bottom: 26px; }
+  .step:last-child { margin-bottom: 0; }
+  .step-num {
+    flex-shrink: 0; width: 28px; height: 28px; border-radius: 50%; background: var(--brand); color: #fff;
+    display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 13px; margin-top: 2px;
+  }
+  .step-body h3 { font-size: 16px; margin: 2px 0 6px; }
+  .step-body p { margin: 0; color: var(--ink-soft); font-size: 14.5px; }
+
+  h2 { font-size: 20px; margin: 46px 0 8px; letter-spacing: -0.01em; }
+  h2 .n { color: var(--ink-faint); font-weight: 500; margin-right: 8px; }
+  .section-sub { color: var(--ink-soft); font-size: 14.5px; margin: 0 0 20px; max-width: 60ch; }
+
+  code { background: var(--surface-sunken); padding: 1px 6px; border-radius: 5px; font-size: 12.5px; font-family: var(--font-mono); }
+
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--rule-soft); vertical-align: top; }
+  th { font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--ink-faint); }
+  td code { background: var(--surface-sunken); padding: 1px 6px; border-radius: 5px; font-size: 12.5px; font-family: var(--font-mono); }
+  .table-wrap { overflow-x: auto; border: 1px solid var(--rule-soft); border-radius: 12px; background: var(--surface); }
+  .table-wrap tr:last-child td { border-bottom: none; }
+
+  .callout {
+    display: flex; gap: 12px; background: var(--warning-soft); border: 1px solid transparent; color: var(--warning);
+    border-radius: 12px; padding: 15px 17px; margin: 22px 0; font-size: 14px; line-height: 1.6;
+  }
+  .callout svg { flex-shrink: 0; width: 17px; height: 17px; margin-top: 2px; }
+  .callout code { color: inherit; }
+  .callout.good { background: var(--good-soft); color: var(--good); }
+
+  .status-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
+  .status-card { background: var(--surface); border: 1px solid var(--rule-soft); border-radius: 12px; padding: 13px 15px; }
+  .status-card .name { font-family: var(--font-mono); font-weight: 600; font-size: 13px; color: var(--brand); margin-bottom: 5px; }
+  .status-card .aliases { font-size: 12px; color: var(--ink-faint); line-height: 1.6; }
+  @media (max-width: 640px) { .status-grid { grid-template-columns: 1fr; } }
+
+  footer { margin-top: 56px; padding-top: 22px; border-top: 1px solid var(--rule-soft); color: var(--ink-faint); font-size: 13px; }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <svg viewBox="50 50 500 470" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+    <path d="M445 92C386 34 302 0 208 0C93 0 0 93 0 208s93 208 208 208c94 0 178-34 237-92l-65-65c-43 40-102 63-172 63-63 0-114-51-114-114S145 94 208 94c70 0 129 23 172 63z" fill="var(--brand)" transform="translate(75 75)"/>
+    <path d="M16 264c31 91 106 152 192 152 71 0 135-27 184-73l-66-65c-31 28-72 44-118 44-44 0-82-24-100-58-17-31-14-56-14-56-21 14-51 37-78 56z" fill="var(--brand-bright)" transform="translate(75 75)"/>
+  </svg>
+  <span class="name">Comptoir</span>
+  <span class="tag">— Guide de connexion WooCommerce</span>
+  <a class="back" href="/" style="color:var(--ink-soft); font-size:13px; text-decoration:none;">← Retour à l'app</a>
+</div>
+
+<div class="wrap">
+  <span class="eyebrow">WooCommerce</span>
+  <h1>Connecter votre boutique WooCommerce</h1>
+  <p class="lede">WooCommerce n'a pas de plateforme centrale comme Shopify — chaque boutique est hébergée sur son propre WordPress. La connexion se fait donc par un webhook que vous configurez une fois, vous-même, dans votre admin WordPress. Pas besoin de développeur, mais comptez 5 minutes dans les réglages WooCommerce.</p>
+
+  <div class="card">
+    <div class="step">
+      <div class="step-num">1</div>
+      <div class="step-body">
+        <h3>Générer vos identifiants dans Comptoir</h3>
+        <p>Onglet <b>Connecteurs</b> → carte <b>WooCommerce</b> → <b>Connecter</b> → donnez un nom à votre boutique → <b>Générer les identifiants</b>. Comptoir affiche une <b>URL de livraison</b> et un <b>secret</b>, uniques à votre boutique — gardez cet écran ouvert pour l'étape suivante.</p>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">2</div>
+      <div class="step-body">
+        <h3>Créer le webhook dans WordPress</h3>
+        <p>Dans votre admin WordPress : <b>WooCommerce → Réglages → Avancé → Webhooks → Ajouter un webhook</b>.</p>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">3</div>
+      <div class="step-body">
+        <h3>Remplir le formulaire</h3>
+        <p>Nom libre (ex. « Comptoir »), <b>Statut</b> : Actif, <b>Sujet</b> : <code>Commande créée</code>, <b>URL de livraison</b> : collez celle de Comptoir, <b>Secret</b> : collez celui de Comptoir, <b>Version de l'API</b> : la plus récente proposée. Enregistrez.</p>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">4</div>
+      <div class="step-body">
+        <h3>Répétez pour les mises à jour (recommandé)</h3>
+        <p>Ajoutez un second webhook identique avec le sujet <code>Commande mise à jour</code> — sans lui, Comptoir voit vos nouvelles commandes mais pas les changements de statut (expédiée, remboursée...) qui arrivent après coup.</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="callout good">
+    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 10.5l4 4 8-9"/></svg>
+    <div>WooCommerce envoie un test de connexion (« ping ») dès l'enregistrement du webhook — c'est normal, Comptoir le reçoit et ne crée aucune commande à partir de ça.</div>
+  </div>
+
+  <h2><span class="n">01</span>Ce qui se synchronise</h2>
+  <p class="section-sub">À chaque commande créée ou mise à jour sur WooCommerce, Comptoir reçoit l'information et met à jour la commande correspondante — y compris si son statut change plusieurs fois.</p>
+
+  <div class="status-grid">
+    <div class="status-card">
+      <div class="name">livree</div>
+      <div class="aliases">commande « Terminée » sur WooCommerce</div>
+    </div>
+    <div class="status-card">
+      <div class="name">preparation</div>
+      <div class="aliases">commande « En attente » ou « En cours »</div>
+    </div>
+    <div class="status-card">
+      <div class="name">retour</div>
+      <div class="aliases">commande « Remboursée » ou « Annulée »</div>
+    </div>
+  </div>
+
+  <p class="section-sub" style="margin-top:16px;">Le stock de vos produits dans Comptoir est ajusté automatiquement à chaque changement : une commande terminée le fait baisser, un remboursement le fait remonter.</p>
+
+  <h2><span class="n">02</span>Votre forfait</h2>
+  <p class="section-sub">Connecter WooCommerce compte comme un canal de vente sur votre forfait. Le nombre de commandes reçues via WooCommerce compte dans votre quota mensuel de commandes.</p>
+
+  <h2><span class="n">03</span>Se déconnecter</h2>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Depuis</th><th>Effet</th></tr></thead>
+      <tbody>
+        <tr><td>Comptoir — <b>Connecteurs</b> → <b>Déconnecter</b></td><td>Comptoir arrête d'accepter les commandes de cette boutique</td></tr>
+        <tr><td>WordPress — supprimez le(s) webhook(s)</td><td>WooCommerce arrête d'envoyer — faites les deux pour une coupure complète</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="callout">
+    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="10" cy="10" r="8.2"/><path d="M10 6.5v4M10 13.2v.1"/></svg>
+    <div>Le secret n'est affiché qu'une seule fois par Comptoir. Si vous le perdez, déconnectez ce connecteur et recommencez — inutile de chercher à le retrouver.</div>
+  </div>
+
+  <footer>Comptoir — Vendez partout. Comptez ici.</footer>
+</div>
+
+</body>
+</html>

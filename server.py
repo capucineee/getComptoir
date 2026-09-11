@@ -358,6 +358,13 @@ def init_db():
         conn.execute("ALTER TABLE users ADD COLUMN consent_version TEXT")
     if "consent_accepted_at" not in existing_cols:
         conn.execute("ALTER TABLE users ADD COLUMN consent_accepted_at TEXT")
+    # api_keys originally only ever meant the custom connector — channel_type generalizes
+    # it to any real integration that authenticates with a plain shared secret rather than
+    # Shopify-style OAuth (WooCommerce today). Existing rows default to 'custom', which is
+    # exactly what they already were.
+    api_keys_cols = {row["name"] for row in conn.execute("PRAGMA table_info(api_keys)")}
+    if "channel_type" not in api_keys_cols:
+        conn.execute("ALTER TABLE api_keys ADD COLUMN channel_type TEXT NOT NULL DEFAULT 'custom'")
     # Billing columns. plan_tier is deliberately NULLable with no DEFAULT: a brand-new
     # signup gets NULL (no active plan — must subscribe via Stripe Checkout to use the
     # app), which only works because this ALTER runs once, here, when these columns don't
@@ -763,7 +770,7 @@ def handle_disconnect_channel(token, channel_type):
     return {"ok": True}
 
 
-def handle_create_connector(token, body):
+def handle_create_connector(token, body, channel_type: str = "custom"):
     user = user_from_token(token)
     if not user:
         raise ApiError(401, "Session invalide ou expirée.")
@@ -774,11 +781,12 @@ def handle_create_connector(token, body):
     connector_id = secrets.token_hex(8)
     api_key = "cpt_live_" + secrets.token_hex(24)
     conn = get_db()
-    # Every custom connector the user creates shares one "custom" channel slot (this is a
-    # category of channel, like Shopify or Etsy, not one slot per store) — only check and
-    # consume the limit the first time, so a second custom connector doesn't need its own.
+    # Every connector of the same channel_type shares one channel slot (this is a category
+    # of channel, like Shopify or WooCommerce, not one slot per store) — only check and
+    # consume the limit the first time, so a second connector of the same type doesn't
+    # need its own.
     already = conn.execute(
-        "SELECT 1 FROM connected_channels WHERE user_id = ? AND channel_type = 'custom'", (user["id"],)
+        "SELECT 1 FROM connected_channels WHERE user_id = ? AND channel_type = ?", (user["id"], channel_type)
     ).fetchone()
     if not already:
         limit = PLAN_LIMITS[plan["tier"]]["channels"]
@@ -786,10 +794,10 @@ def handle_create_connector(token, body):
         if limit is not None and current >= limit:
             conn.close()
             raise ApiError(402, f"Votre forfait autorise {limit} canal{'aux' if limit > 1 else ''} connecté{'s' if limit > 1 else ''} maximum — passez à un forfait supérieur pour en connecter davantage.")
-        conn.execute("INSERT INTO connected_channels (user_id, channel_type) VALUES (?, 'custom')", (user["id"],))
+        conn.execute("INSERT INTO connected_channels (user_id, channel_type) VALUES (?, ?)", (user["id"], channel_type))
     conn.execute(
-        "INSERT INTO api_keys (key, user_id, connector_id, label) VALUES (?, ?, ?, ?)",
-        (api_key, user["id"], connector_id, label),
+        "INSERT INTO api_keys (key, user_id, connector_id, label, channel_type) VALUES (?, ?, ?, ?, ?)",
+        (api_key, user["id"], connector_id, label, channel_type),
     )
     conn.commit()
     conn.close()
@@ -801,15 +809,25 @@ def handle_delete_connector(token, connector_id):
     if not user:
         raise ApiError(401, "Session invalide ou expirée.")
     conn = get_db()
+    row = conn.execute(
+        "SELECT channel_type FROM api_keys WHERE user_id = ? AND connector_id = ?", (user["id"], connector_id)
+    ).fetchone()
     conn.execute(
         "DELETE FROM api_keys WHERE user_id = ? AND connector_id = ?",
         (user["id"], connector_id),
     )
-    # Free the "custom" channel slot only once no custom connector is left — a user with
-    # two custom connectors deleting one should still count as using the slot.
-    remaining = conn.execute("SELECT COUNT(*) FROM api_keys WHERE user_id = ?", (user["id"],)).fetchone()[0]
-    if remaining == 0:
-        conn.execute("DELETE FROM connected_channels WHERE user_id = ? AND channel_type = 'custom'", (user["id"],))
+    # Free that channel_type's slot only once no connector of the SAME type is left — a
+    # user with two WooCommerce connectors deleting one should still count as using the
+    # slot, but deleting her only WooCommerce connector shouldn't touch a separate custom
+    # connector's slot.
+    if row:
+        remaining = conn.execute(
+            "SELECT COUNT(*) FROM api_keys WHERE user_id = ? AND channel_type = ?", (user["id"], row["channel_type"])
+        ).fetchone()[0]
+        if remaining == 0:
+            conn.execute(
+                "DELETE FROM connected_channels WHERE user_id = ? AND channel_type = ?", (user["id"], row["channel_type"])
+            )
     conn.commit()
     conn.close()
     return {"ok": True}
@@ -821,7 +839,7 @@ def handle_delete_connector(token, connector_id):
 FIELD_ALIASES = {
     "amount": ["amount", "total", "totalAmount", "total_amount", "montant", "price", "totalPrice", "total_price", "grandTotal", "grand_total", "total_ttc", "totalTtc"],
     "externalId": ["externalId", "external_id", "id", "orderId", "order_id", "reference", "ref", "orderRef", "order_ref", "orderNumber", "order_number", "number"],
-    "date": ["date", "created_at", "createdAt", "order_date", "orderDate", "date_creation", "dateCreation"],
+    "date": ["date", "created_at", "createdAt", "date_created", "dateCreated", "order_date", "orderDate", "date_creation", "dateCreation"],
     "status": ["status", "state", "statut", "orderStatus", "order_status"],
     "customerName": ["customerName", "customer_name", "client", "clientName", "client_name", "nom_client", "buyer", "buyerName", "name"],
     "productName": ["productName", "product_name", "product", "article", "item", "itemName", "item_name", "designation"],
@@ -920,12 +938,12 @@ def handle_ingest_order(api_key, body):
         raise ApiError(401, "Clé API manquante.")
     conn = get_db()
     row = conn.execute(
-        "SELECT user_id, connector_id FROM api_keys WHERE key = ?", (api_key,)
+        "SELECT user_id, connector_id, channel_type FROM api_keys WHERE key = ?", (api_key,)
     ).fetchone()
     if not row:
         conn.close()
         raise ApiError(401, "Clé API invalide ou révoquée.")
-    return _ingest_order_core(conn, row["user_id"], "custom", row["connector_id"], body)
+    return _ingest_order_core(conn, row["user_id"], row["channel_type"], row["connector_id"], body)
 
 
 def _ingest_order_core(conn, user_id: str, channel_type: str, connector_id: str, body: dict):
@@ -967,12 +985,14 @@ def _ingest_order_core(conn, user_id: str, channel_type: str, connector_id: str,
         date = datetime.now(timezone.utc).isoformat()
 
     customer_name = _pick_field(body, FIELD_ALIASES["customerName"])
-    if not customer_name and isinstance(body.get("customer"), dict):
-        customer_obj = body["customer"]
+    # "customer" (Shopify and most others) or "billing" (WooCommerce's order webhook
+    # payload names it that — it's really just who the order belongs to).
+    customer_obj = body.get("customer") if isinstance(body.get("customer"), dict) else body.get("billing") if isinstance(body.get("billing"), dict) else None
+    if not customer_name and customer_obj:
         customer_name = _pick_field(customer_obj, ["name", "fullName", "full_name", "nom"])
         if not customer_name:
-            # Shopify (and others) split the name into first_name/last_name rather than
-            # a single combined field.
+            # Several platforms (Shopify, WooCommerce...) split the name into
+            # first_name/last_name rather than a single combined field.
             first = _pick_field(customer_obj, ["first_name", "firstName"])
             last = _pick_field(customer_obj, ["last_name", "lastName"])
             combined = " ".join(str(p) for p in (first, last) if p)
@@ -985,7 +1005,9 @@ def _ingest_order_core(conn, user_id: str, channel_type: str, connector_id: str,
         if isinstance(items, list) and items:
             first = items[0]
             if isinstance(first, dict):
-                product_name = _pick_field(first, FIELD_ALIASES["productName"] + ["title", "label"])
+                # "name" is WooCommerce line_items' product-name field; "title"/"label"
+                # cover other common shapes.
+                product_name = _pick_field(first, FIELD_ALIASES["productName"] + ["name", "title", "label"])
             elif isinstance(first, str):
                 product_name = first
     product_name = str(product_name).strip() if product_name not in (None, "") else None
@@ -1454,6 +1476,53 @@ def handle_shopify_webhook(headers, raw_body: bytes):
     return _ingest_order_core(conn, user_id, "shopify", shop, order)
 
 
+def handle_woocommerce_webhook(connector_id: str, headers, raw_body: bytes):
+    """WooCommerce (self-hosted — every merchant runs her own WordPress site, there's no
+    central platform to register an OAuth app with) signs each webhook delivery with a
+    per-webhook secret, sent as base64(HMAC-SHA256(raw_body, secret)) in
+    X-WC-Webhook-Signature — no custom Authorization header support exists in WooCommerce's
+    native webhook UI, so the connector is identified by this URL's own path instead, and
+    that per-connector secret (reusing the same random value handle_create_connector
+    already generates for the custom connector) is what the merchant pastes into
+    WooCommerce's webhook 'Secret' field."""
+    conn = get_db()
+    row = conn.execute(
+        "SELECT user_id, key FROM api_keys WHERE connector_id = ? AND channel_type = 'woocommerce'", (connector_id,)
+    ).fetchone()
+    if not row:
+        conn.close()
+        return {"ok": True, "ignored": True}  # disconnected connector — tell WooCommerce to stop retrying
+
+    signature = headers.get("X-WC-Webhook-Signature", "")
+    expected = base64.b64encode(hmac.new(row["key"].encode("utf-8"), raw_body, hashlib.sha256).digest()).decode("utf-8")
+    if not hmac.compare_digest(expected, signature):
+        conn.close()
+        raise ApiError(401, "Signature WooCommerce invalide.")
+
+    # WooCommerce sends an empty/near-empty body as a one-time 'ping' right when the
+    # webhook is first created, to confirm the URL is reachable — not a real order, and
+    # not something to error on (a non-2xx here can get the webhook auto-disabled).
+    try:
+        order = json.loads(raw_body.decode("utf-8")) if raw_body else {}
+    except json.JSONDecodeError:
+        conn.close()
+        return {"ok": True, "ping": True}
+    if not isinstance(order, dict) or not order:
+        conn.close()
+        return {"ok": True, "ping": True}
+
+    try:
+        return _ingest_order_core(conn, row["user_id"], "woocommerce", connector_id, order)
+    except ApiError as e:
+        # Same reasoning as the ping case: a real delivery failure (account over its plan
+        # limit, no active plan, a malformed order) should be logged and swallowed here,
+        # not returned as an HTTP error — WooCommerce disables a webhook after enough
+        # failed deliveries, which would silently kill the whole connection over one bad
+        # or rate-limited order rather than just that order.
+        print(f"[WooCommerce webhook ignoré — {e.status}] connector={connector_id}: {e.message}", file=sys.stderr)
+        return {"ok": True, "ignored": True}
+
+
 class Handler(http.server.SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=ROOT, **kwargs)
@@ -1530,6 +1599,16 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 return self._send_json(e.status, {"error": e.message})
             except Exception as e:  # pragma: no cover
                 return self._send_server_error(e)
+        woo_webhook_match = re.match(r"^/api/connectors/woocommerce/webhook/([^/]+)$", path)
+        if woo_webhook_match:
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+                raw = self.rfile.read(length) if length else b""
+                return self._send_json(200, handle_woocommerce_webhook(woo_webhook_match.group(1), self.headers, raw))
+            except ApiError as e:
+                return self._send_json(e.status, {"error": e.message})
+            except Exception as e:  # pragma: no cover
+                return self._send_server_error(e)
         try:
             body = self._read_json_body()
             if path == "/api/signup":
@@ -1554,6 +1633,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 return self._send_json(200, handle_billing_portal(self._bearer_token()))
             if path == "/api/connectors/shopify/install":
                 return self._send_json(200, handle_shopify_install(self._bearer_token(), body))
+            if path == "/api/connectors/woocommerce":
+                return self._send_json(200, handle_create_connector(self._bearer_token(), body, channel_type="woocommerce"))
             raise ApiError(404, "Route inconnue.")
         except ApiError as e:
             self._send_json(e.status, {"error": e.message})

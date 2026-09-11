@@ -17,6 +17,18 @@ const CHANNEL_META = {
   custom: { label: 'Personnalisé', color: 'var(--cat-custom)', initials: '{}' }
 };
 
+// Real connections (Shopify, WooCommerce) each get a setup guide reachable via a small i
+// button on their card — the still-simulated platforms have no real setup to document.
+const CONNECTOR_GUIDES = {
+  shopify: { action: 'openShopifyGuide', title: 'Guide de connexion Shopify' },
+  woocommerce: { action: 'openWooCommerceGuide', title: 'Guide de connexion WooCommerce' }
+};
+function connectorGuideButton(type) {
+  const g = CONNECTOR_GUIDES[type];
+  if (!g) return '';
+  return `<button class="btn icon" data-action="${g.action}" title="${g.title}" aria-label="${g.title}" style="margin-left:auto; flex-shrink:0;">i</button>`;
+}
+
 const FIELD_CATALOG = {
   manual: [
     { key: 'note_interne', label: 'Note interne' },
@@ -786,15 +798,15 @@ function renderLanding() {
           </div>
           <div class="l-channel-row">
             <div class="l-channel-chip"><span class="sw" style="background:var(--cat-shopify)"></span>Shopify — disponible aujourd'hui</div>
+            <div class="l-channel-chip"><span class="sw" style="background:var(--cat-woocommerce)"></span>WooCommerce — disponible aujourd'hui</div>
             <div class="l-channel-chip"><span class="sw" style="background:var(--cat-custom)"></span>Connecteur personnalisé — disponible aujourd'hui</div>
           </div>
           <div class="l-channel-row">
             <div class="l-channel-chip"><span class="sw" style="background:var(--cat-etsy)"></span>Etsy</div>
             <div class="l-channel-chip"><span class="sw" style="background:var(--cat-instagram)"></span>Instagram Shop</div>
-            <div class="l-channel-chip"><span class="sw" style="background:var(--cat-woocommerce)"></span>WooCommerce</div>
             <div class="l-channel-chip plus">+ toute plateforme via API</div>
           </div>
-          <p class="l-channel-note">Shopify se connecte réellement via OAuth — commandes synchronisées automatiquement dès qu'elles arrivent. Le connecteur personnalisé fonctionne avec n'importe quel autre site capable d'envoyer ses commandes par API. Les autres intégrations natives sont en cours de développement.</p>
+          <p class="l-channel-note">Shopify et WooCommerce se connectent réellement (OAuth pour Shopify, webhook pour WooCommerce) — commandes synchronisées automatiquement dès qu'elles arrivent. Le connecteur personnalisé fonctionne avec n'importe quel autre site capable d'envoyer ses commandes par API. Les autres intégrations natives sont en cours de développement.</p>
         </div>
       </section>
 
@@ -2078,7 +2090,7 @@ function pageConnecteurs() {
           <div class="head">
             <div class="ico" style="background:${channelColor(c.type)}">${CHANNEL_META[c.type]?.initials ?? '?'}</div>
             <div><div class="name">${c.label}</div><div class="meta">Connecté le ${fmtDate(c.connectedAt)}</div></div>
-            ${c.type === 'shopify' ? `<button class="btn icon" data-action="openShopifyGuide" title="Guide de connexion Shopify" aria-label="Guide de connexion Shopify" style="margin-left:auto; flex-shrink:0;">i</button>` : ''}
+            ${connectorGuideButton(c.type)}
           </div>
           <div class="meta">Dernière commande reçue : ${lastOrder ? fmtDateTime(lastOrder) : 'Aucune pour l\'instant'}</div>
           ${c.apiKey ? `<div class="api-box"><div class="line"><span>${c.apiKey.slice(0, 22)}…</span><span><span class="copy" data-action="copyKey" data-key="${c.apiKey}">Copier</span> · <span class="copy" data-action="openGuide" title="Guide d'intégration">ⓘ</span></span></div></div>` : ''}
@@ -2097,7 +2109,7 @@ function pageConnecteurs() {
           <div class="head">
             <div class="ico" style="background:var(--ink-faint)">${CHANNEL_META[t].initials}</div>
             <div><div class="name">${CHANNEL_META[t].label}</div><div class="meta">Non connecté</div></div>
-            ${t === 'shopify' ? `<button class="btn icon" data-action="openShopifyGuide" title="Guide de connexion Shopify" aria-label="Guide de connexion Shopify" style="margin-left:auto; flex-shrink:0;">i</button>` : ''}
+            ${connectorGuideButton(t)}
           </div>
           <div class="actions"><button class="btn primary sm" data-action="openConnect" data-type="${t}">Connecter</button></div>
         </div>`).join('')}
@@ -2461,6 +2473,7 @@ function openStockConflictModal(product, connector) {
 function openConnectModal(type) {
   const meta = CHANNEL_META[type];
   if (type === 'shopify') return openShopifyConnectModal();
+  if (type === 'woocommerce') return openWooCommerceConnectModal();
   openModal(`
     <h3>Connecter ${meta.label}</h3>
     <div class="modal-sub">Simulation de l'autorisation OAuth — aucune vraie connexion n'est établie.</div>
@@ -2481,6 +2494,20 @@ function openShopifyConnectModal() {
       <div class="field"><label>Adresse de votre boutique</label><input type="text" id="shopifyDomain" placeholder="votre-boutique.myshopify.com"></div>
       <div class="actions"><button class="btn" data-action="closeModal">Annuler</button><button class="btn primary" data-action="doShopifyConnect">Continuer vers Shopify</button></div>
     </div>
+  `);
+}
+
+// WooCommerce has no central platform to OAuth against — each merchant self-hosts, so the
+// real connection is: Comptoir generates a unique webhook URL + secret, the merchant pastes
+// both into her own WooCommerce admin (Réglages → Avancé → Webhooks). Real commandes from
+// then on, same as the custom connector, just configured on WooCommerce's side instead of
+// a developer's.
+function openWooCommerceConnectModal() {
+  openModal(`
+    <h3>Connecter WooCommerce</h3>
+    <div class="modal-sub">Connexion réelle par webhook — à configurer une fois dans votre admin WordPress. <span class="copy" data-action="openWooCommerceGuide" title="Guide de connexion WooCommerce">Guide complet ⓘ</span></div>
+    <div class="field"><label>Nom de la boutique</label><input type="text" id="wooName" placeholder="Ex. Ma boutique WordPress"></div>
+    <div class="actions"><button class="btn" data-action="closeModal">Annuler</button><button class="btn primary" data-action="submitAddWooCommerce">Générer les identifiants</button></div>
   `);
 }
 // Real Stripe Checkout — no card form here at all. Card numbers are entered on Stripe's
@@ -2883,6 +2910,43 @@ document.addEventListener('click', e => {
         submitBtn.textContent = 'Générer la clé';
         toast(err.message, true);
       });
+    return;
+  }
+  if (action === 'submitAddWooCommerce') {
+    const name = document.getElementById('wooName').value.trim();
+    if (!name) return toast('Le nom de la boutique est requis.', true);
+    const session = getSession();
+    const submitBtn = el;
+    submitBtn.disabled = true;
+    submitBtn.textContent = 'Génération…';
+    apiRequest('/api/connectors/woocommerce', { method: 'POST', token: session.token, body: { label: name } })
+      .then(({ connectorId, apiKey }) => {
+        const conn = { id: connectorId, type: 'woocommerce', label: name, status: 'connected', connectedAt: new Date().toISOString(), lastSync: new Date().toISOString(), apiKey };
+        state.connectors.push(conn); persist();
+        const webhookUrl = `${location.origin}/api/connectors/woocommerce/webhook/${connectorId}`;
+        document.getElementById('modalBody').innerHTML = `
+          <h3>${escapeHTML(name)} — presque terminé</h3>
+          <div class="modal-sub">Dans votre admin WordPress : <b>WooCommerce → Réglages → Avancé → Webhooks → Ajouter un webhook</b>. Copiez ces deux valeurs dedans. <span class="copy" data-action="openWooCommerceGuide" title="Guide de connexion WooCommerce">Guide détaillé ⓘ</span></div>
+          <div class="api-box">
+            <div class="line"><span>URL de livraison</span><span class="copy" data-action="copyKey" data-key="${webhookUrl}">Copier</span></div>
+            <div style="word-break:break-all; margin-bottom:8px;">${webhookUrl}</div>
+            <div class="line"><span>Secret</span><span class="copy" data-action="copyKey" data-key="${apiKey}">Copier</span></div>
+            <div style="word-break:break-all;">${apiKey}</div>
+          </div>
+          <div class="modal-sub" style="margin-top:14px;">Sujet du webhook : <code>Commande créée</code> (ajoutez aussi <code>Commande mise à jour</code> pour suivre les changements de statut). Une fois enregistré, vos commandes WooCommerce arrivent automatiquement dans Comptoir.</div>
+          <div class="actions"><button class="btn primary" data-action="closeModal">Terminé</button></div>
+        `;
+        render(); toast(`Connecteur « ${name} » créé.`);
+      })
+      .catch(err => {
+        submitBtn.disabled = false;
+        submitBtn.textContent = 'Générer les identifiants';
+        toast(err.message, true);
+      });
+    return;
+  }
+  if (action === 'openWooCommerceGuide') {
+    window.open('/guide-woocommerce.html', '_blank', 'noopener');
     return;
   }
   if (action === 'openGuide') {
