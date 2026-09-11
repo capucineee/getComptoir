@@ -97,9 +97,11 @@ def branded_email_html(heading: str, body_html: str, footnote: str, cta_label: s
     alert emails later) — table-based layout with inline styles only, since email clients
     (Outlook especially) ignore <style> blocks and most CSS layout. Colors match the brand
     tokens in styles.css (kept as literals here, not shared — a mail client can't read a
-    stylesheet or CSS variables) and the logo is the hosted PNG icon, since inline SVG
-    renders inconsistently across mail clients."""
-    logo_url = f"{PUBLIC_BASE_URL}/icons/icon-192.png"
+    stylesheet or CSS variables) and the logo is a dedicated flat PNG (icons/email-logo.png
+    — the plain two-tone "C" mark, not the app's PWA icon, which carries fine detail that
+    turns to mud at the ~26px this renders at) rather than inline SVG, which renders
+    inconsistently across mail clients."""
+    logo_url = f"{PUBLIC_BASE_URL}/icons/email-logo.png"
     cta_html = "" if not cta_label else f"""
         <tr><td style="padding:6px 32px 8px;">
           <table role="presentation" cellpadding="0" cellspacing="0"><tr>
@@ -117,7 +119,7 @@ def branded_email_html(heading: str, body_html: str, footnote: str, cta_label: s
       <table role="presentation" width="480" cellpadding="0" cellspacing="0" style="max-width:480px; width:100%; background:#FFFFFF; border-radius:14px; border:1px solid #E1E3DC;">
         <tr><td style="padding:28px 32px 0;">
           <table role="presentation" cellpadding="0" cellspacing="0"><tr>
-            <td style="padding-right:9px;"><img src="{logo_url}" width="26" height="26" alt="" style="display:block; border-radius:6px;"></td>
+            <td style="padding-right:9px;"><img src="{logo_url}" width="26" height="26" alt="" style="display:block;"></td>
             <td style="font-size:17px; font-weight:800; color:#1B211D; letter-spacing:-0.02em; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">Comptoir</td>
           </tr></table>
         </td></tr>
