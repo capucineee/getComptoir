@@ -2078,6 +2078,7 @@ function pageConnecteurs() {
           <div class="head">
             <div class="ico" style="background:${channelColor(c.type)}">${CHANNEL_META[c.type]?.initials ?? '?'}</div>
             <div><div class="name">${c.label}</div><div class="meta">Connecté le ${fmtDate(c.connectedAt)}</div></div>
+            ${c.type === 'shopify' ? `<button class="btn icon" data-action="openShopifyGuide" title="Guide de connexion Shopify" aria-label="Guide de connexion Shopify" style="margin-left:auto; flex-shrink:0;">i</button>` : ''}
           </div>
           <div class="meta">Dernière commande reçue : ${lastOrder ? fmtDateTime(lastOrder) : 'Aucune pour l\'instant'}</div>
           ${c.apiKey ? `<div class="api-box"><div class="line"><span>${c.apiKey.slice(0, 22)}…</span><span><span class="copy" data-action="copyKey" data-key="${c.apiKey}">Copier</span> · <span class="copy" data-action="openGuide" title="Guide d'intégration">ⓘ</span></span></div></div>` : ''}
@@ -2096,6 +2097,7 @@ function pageConnecteurs() {
           <div class="head">
             <div class="ico" style="background:var(--ink-faint)">${CHANNEL_META[t].initials}</div>
             <div><div class="name">${CHANNEL_META[t].label}</div><div class="meta">Non connecté</div></div>
+            ${t === 'shopify' ? `<button class="btn icon" data-action="openShopifyGuide" title="Guide de connexion Shopify" aria-label="Guide de connexion Shopify" style="margin-left:auto; flex-shrink:0;">i</button>` : ''}
           </div>
           <div class="actions"><button class="btn primary sm" data-action="openConnect" data-type="${t}">Connecter</button></div>
         </div>`).join('')}
@@ -2885,6 +2887,10 @@ document.addEventListener('click', e => {
   }
   if (action === 'openGuide') {
     window.open(CUSTOM_CONNECTOR_GUIDE_URL, '_blank', 'noopener');
+    return;
+  }
+  if (action === 'openShopifyGuide') {
+    window.open('/guide-shopify.html', '_blank', 'noopener');
     return;
   }
   if (action === 'copyKey') {
