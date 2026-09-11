@@ -17,18 +17,16 @@ import json
 import os
 import re
 import secrets
-import smtplib
-import socket
 import sqlite3
 import sys
 import threading
 import time
 import traceback
 import unicodedata
+import urllib.error
 import urllib.parse
+import urllib.request
 from datetime import datetime, timezone
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 # On most hosts the container's own filesystem is wiped on every redeploy, which would
@@ -44,79 +42,52 @@ PASSWORD_RESET_TTL_MINUTES = 60
 # Host header (which can be spoofed or, behind a proxy, wrong) — same reasoning as
 # COMPTOIR_DB_PATH above.
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL") or "https://getcomptoir.fr").rstrip("/")
-# Real outbound email needs an SMTP relay (Brevo, Mailgun, a Gmail app password...) — set
-# these on the host once you have one. Until they're set, send_email() logs the message
-# (reset link included) to stderr instead of sending, so local dev and an unconfigured
-# deploy keep working rather than crashing every request that needs to email someone.
-SMTP_HOST = os.environ.get("SMTP_HOST")
-SMTP_PORT = int(os.environ.get("SMTP_PORT", "587"))
-SMTP_USER = os.environ.get("SMTP_USER")
-SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD")
-SMTP_FROM = os.environ.get("SMTP_FROM") or (f"Comptoir <{SMTP_USER}>" if SMTP_USER else "Comptoir <no-reply@getcomptoir.fr>")
-
-
-def _ipv4_connect(host, port, timeout):
-    # Railway's containers (like many PaaS hosts) have no outbound IPv6 route, but
-    # smtp.gmail.com resolves to both an IPv4 and an IPv6 address — the stdlib's default
-    # socket.create_connection() tries whichever getaddrinfo() returns first, and an IPv6
-    # attempt with no route fails immediately with "Network is unreachable" (OSError 101)
-    # rather than falling through cleanly. Forcing AF_INET here is the standard fix.
-    last_err = None
-    for family, socktype, proto, _, sockaddr in socket.getaddrinfo(host, port, socket.AF_INET, socket.SOCK_STREAM):
-        sock = None
-        try:
-            sock = socket.socket(family, socktype, proto)
-            if timeout is not None:
-                sock.settimeout(timeout)
-            sock.connect(sockaddr)
-            return sock
-        except OSError as e:
-            last_err = e
-            if sock is not None:
-                sock.close()
-    raise last_err or OSError(f"Impossible de joindre {host}:{port} en IPv4.")
-
-
-class _IPv4SMTP(smtplib.SMTP):
-    """Plain SMTP, upgraded to TLS via STARTTLS after connecting — used for port 587."""
-    def _get_socket(self, host, port, timeout):
-        return _ipv4_connect(host, port, timeout)
-
-
-class _IPv4SMTP_SSL(smtplib.SMTP_SSL):
-    """TLS from the very first byte — used for port 465, in case a host that blocks
-    STARTTLS-on-587 still allows outbound 465 (some do, having only blocked the port most
-    associated with spam relaying)."""
-    def _get_socket(self, host, port, timeout):
-        sock = _ipv4_connect(host, port, timeout)
-        return self.context.wrap_socket(sock, server_hostname=host)
+# Real outbound email goes through Brevo's HTTP API rather than SMTP: Railway's outbound
+# network drops both port 587 and 465 (confirmed live — STARTTLS and implicit-TLS attempts
+# both hung until timeout, after ruling out IPv6 routing and credentials as the cause), a
+# common anti-spam restriction on cloud hosts. An HTTPS POST to api.brevo.com uses port 443,
+# which is never blocked. Set BREVO_API_KEY (and optionally EMAIL_FROM/EMAIL_FROM_NAME) on
+# the host; until then, send_email() logs the message (reset link included) to stderr
+# instead of sending, so local dev and an unconfigured deploy keep working.
+BREVO_API_KEY = os.environ.get("BREVO_API_KEY")
+EMAIL_FROM_ADDRESS = os.environ.get("EMAIL_FROM") or "contact@getcomptoir.fr"
+EMAIL_FROM_NAME = os.environ.get("EMAIL_FROM_NAME") or "Comptoir"
 
 
 def send_email(to_addr: str, subject: str, text_body: str, html_body: str | None = None):
-    if not SMTP_HOST or not SMTP_USER or not SMTP_PASSWORD:
-        print(f"[email non envoyé — SMTP non configuré] à={to_addr} sujet={subject!r}\n{text_body}", file=sys.stderr)
+    if not BREVO_API_KEY:
+        print(f"[email non envoyé — BREVO_API_KEY non configurée] à={to_addr} sujet={subject!r}\n{text_body}", file=sys.stderr)
         return
-    msg = MIMEMultipart("alternative")
-    msg["Subject"] = subject
-    msg["From"] = SMTP_FROM
-    msg["To"] = to_addr
-    msg.attach(MIMEText(text_body, "plain", "utf-8"))
+    payload = {
+        "sender": {"name": EMAIL_FROM_NAME, "email": EMAIL_FROM_ADDRESS},
+        "to": [{"email": to_addr}],
+        "subject": subject,
+        "textContent": text_body,
+    }
     if html_body:
-        msg.attach(MIMEText(html_body, "html", "utf-8"))
+        payload["htmlContent"] = html_body
+    req = urllib.request.Request(
+        "https://api.brevo.com/v3/smtp/email",
+        data=json.dumps(payload).encode("utf-8"),
+        method="POST",
+        headers={"api-key": BREVO_API_KEY, "Content-Type": "application/json", "Accept": "application/json"},
+    )
     try:
-        if SMTP_PORT == 465:
-            with _IPv4SMTP_SSL(SMTP_HOST, SMTP_PORT, timeout=10) as server:
-                server.login(SMTP_USER, SMTP_PASSWORD)
-                server.sendmail(SMTP_FROM, [to_addr], msg.as_string())
-        else:
-            with _IPv4SMTP(SMTP_HOST, SMTP_PORT, timeout=10) as server:
-                server.starttls()
-                server.login(SMTP_USER, SMTP_PASSWORD)
-                server.sendmail(SMTP_FROM, [to_addr], msg.as_string())
+        with urllib.request.urlopen(req, timeout=10):
+            pass
+    except urllib.error.HTTPError as e:
+        # Brevo's error body names the actual problem (unverified sender, bad key, daily
+        # quota...) — worth logging in full rather than collapsing to a generic traceback.
+        detail = ""
+        try:
+            detail = e.read().decode("utf-8", "replace")
+        except Exception:
+            pass
+        print(f"[Brevo a refusé l'envoi — {e.code}] à={to_addr}\n{detail}", file=sys.stderr)
     except Exception:
-        # Never let a flaky SMTP relay turn into a 500 for the caller (e.g. signup, which
-        # doesn't yet send an email but will) — log it, the request that triggered it
-        # still succeeds from the user's point of view where that's the right trade-off.
+        # Never let a flaky email provider turn into a 500 for the caller (e.g. signup,
+        # which doesn't yet send an email but will) — log it, the request that triggered
+        # it still succeeds from the user's point of view where that's the right trade-off.
         traceback.print_exc(file=sys.stderr)
 # The version accepted at signup is decided HERE, not sent by the client — trusting a
 # client-supplied version would let anyone claim they accepted a version they never actually
