@@ -920,7 +920,7 @@ function renderAuth(mode) {
           </div>
           ${isSignup ? `<div class="field"><label>Confirmer le mot de passe</label><input type="password" id="authPassword2" placeholder="••••••••" required minlength="8"></div>` : ''}
           ${isSignup ? `<label style="display:flex; align-items:flex-start; gap:8px; font-size:12.5px; color:var(--ink-soft); margin:2px 0 14px; cursor:pointer;">
-            <input type="checkbox" id="authAcceptTerms" required style="margin-top:2px; flex-shrink:0;">
+            <input type="checkbox" id="authAcceptTerms" required style="width:16px; height:16px; margin-top:2px; flex-shrink:0;">
             <span>J'accepte les <a href="/conditions-generales.html" target="_blank" style="color:var(--ink-soft); text-decoration:underline;">conditions générales d'utilisation</a> et la <a href="/politique-confidentialite.html" target="_blank" style="color:var(--ink-soft); text-decoration:underline;">politique de confidentialité</a>.</span>
           </label>` : ''}
           <button type="submit" class="btn primary" id="authSubmitBtn">${isSignup ? 'Créer mon compte' : 'Se connecter'}</button>
