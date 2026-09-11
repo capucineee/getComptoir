@@ -252,7 +252,10 @@ function emptyState() {
     savTickets: [],
     catalogFields: [],
     expenses: [],
-    plan: { tier: 'decouverte', renewsAt: isoDaysAgo(-30) },
+    // Placeholder only — boot() overwrites this with the server-authoritative plan
+    // (resolve_plan() in server.py) right after login, before it's ever rendered or
+    // persisted. A brand-new account really does start with no active plan.
+    plan: { tier: null, status: 'inactive', renewsAt: null, freeForever: false },
     billingHistory: []
   };
 }
@@ -1065,6 +1068,12 @@ async function boot() {
       state = migrateState(emptyState());
       await apiRequest('/api/state', { method: 'PUT', token: session.token, body: { data: JSON.stringify(state) } });
     }
+    // The plan is server-authoritative — real Stripe subscription state, or the free-
+    // forever/grandfather resolution server.py's resolve_plan() applies — never the
+    // client's own saved copy, which is only ever a display cache and could otherwise be
+    // edited locally to claim any plan. Overwritten fresh on every boot, before anything
+    // gets persisted back.
+    state.plan = { tier: me.plan.tier, status: me.plan.status, renewsAt: me.plan.renewsAt, freeForever: me.plan.freeForever };
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
   } catch (err) {
     console.error('Impossible de charger les données depuis le serveur, utilisation du cache local.', err);
@@ -1077,6 +1086,15 @@ async function boot() {
   if (label) label.textContent = me.email;
   paintTheme();
   render();
+
+  // Returning from Stripe Checkout: ?checkout=success|cancel#facturation. Report it once,
+  // then scrub the query so a refresh or the back button doesn't re-show the toast.
+  const checkoutParam = new URLSearchParams(location.search).get('checkout');
+  if (checkoutParam) {
+    history.replaceState(null, '', location.pathname + location.hash);
+    if (checkoutParam === 'success') toast('Abonnement activé — merci !');
+    else if (checkoutParam === 'cancel') toast('Paiement annulé — aucun changement.', true);
+  }
 }
 
 /* ---------- toasts ---------- */
@@ -2069,24 +2087,35 @@ function pageConnecteurs() {
 /* ---------- page: facturation ---------- */
 function pageFacturation() {
   const tier = state.plan.tier;
-  const meta = PLAN_META[tier];
+  const meta = tier ? PLAN_META[tier] : null;
+  const freeForever = !!state.plan.freeForever;
+  const statusLabel = { active: 'Actif', past_due: 'Paiement en retard', canceled: 'Résilié', unpaid: 'Impayé', trialing: 'Essai' }[state.plan.status] || state.plan.status;
+  const statusClass = state.plan.status === 'active' ? 'good' : state.plan.status === 'past_due' || state.plan.status === 'unpaid' ? 'critical' : 'warning';
   return `
     <div class="topbar">
-      <div><h1>Facturation</h1><div class="sub">Forfait actuel : ${meta.name}</div></div>
+      <div><h1>Facturation</h1><div class="sub">Forfait actuel : ${meta ? meta.name : 'Aucun'}</div></div>
       <div class="topbar-actions">${themeToggleHTML()}</div>
     </div>
 
     <div class="card" style="margin-bottom:18px;">
+      ${meta ? `
       <div class="card-head">
         <div>
           <h2>Forfait ${meta.name}</h2>
-          <div class="card-sub">Renouvellement le ${fmtDate(state.plan.renewsAt)}</div>
+          <div class="card-sub">${freeForever ? 'Accès gratuit permanent' : state.plan.renewsAt ? `Renouvellement le ${fmtDate(state.plan.renewsAt)}` : 'Géré via Stripe'}</div>
         </div>
-        <span class="badge-current">Actif</span>
+        <span class="status-chip ${statusClass}"><span class="dot"></span>${freeForever ? 'Gratuit' : statusLabel}</span>
       </div>
-      <div style="font-family:var(--font-mono); font-size:13px; color:var(--ink-soft);">
+      <div style="font-family:var(--font-mono); font-size:13px; color:var(--ink-soft); margin-bottom:${freeForever ? '0' : '14px'};">
         ${meta.channels === Infinity ? 'Canaux illimités' : meta.channels + ' canaux max'} · jusqu'à ${fmtNum(meta.orders)} commandes/mois
       </div>
+      ${!freeForever ? `<button class="btn" data-action="openBillingPortal">Gérer mon abonnement</button>` : ''}
+      ` : `
+      <div class="card-head">
+        <div><h2>Aucun forfait actif</h2><div class="card-sub">Choisissez un forfait ci-dessous pour connecter des canaux et faire remonter de vraies commandes.</div></div>
+        <span class="status-chip warning"><span class="dot"></span>Inactif</span>
+      </div>
+      `}
     </div>
 
     <div class="plan-grid">
@@ -2094,24 +2123,21 @@ function pageFacturation() {
         <div class="plan-card ${key === tier ? 'current' : ''}">
           ${key === tier ? '<span class="badge-current">Forfait actuel</span>' : ''}
           <div class="tier-name">${p.name}</div>
-          <div class="price">${p.price === 0 ? 'Gratuit' : fmtEUR(p.price)}${p.price ? '<span>/mois</span>' : ''}</div>
+          <div class="price">${fmtEUR(p.price)}<span>/mois</span></div>
           <ul>
             <li>${p.channels === Infinity ? 'Canaux illimités' : p.channels + ' canaux'}</li>
             <li>${fmtNum(p.orders)} commandes/mois</li>
           </ul>
-          ${key === tier ? `<button class="btn" disabled>Forfait actuel</button>` : `<button class="btn primary" data-action="openCheckout" data-tier="${key}">Choisir ce forfait</button>`}
+          ${key === tier ? `<button class="btn" disabled>Forfait actuel</button>` : freeForever ? `<button class="btn" disabled title="Accès gratuit permanent">—</button>` : `<button class="btn primary" data-action="openCheckout" data-tier="${key}">Choisir ce forfait</button>`}
         </div>
       `).join('')}
     </div>
 
+    ${!freeForever && tier ? `
     <div class="card">
-      <h2>Historique de facturation</h2>
-      <div class="card-sub">Factures et paiements passés</div>
-      <table class="data">
-        <thead><tr><th>Date</th><th>Forfait</th><th style="text-align:right">Montant</th></tr></thead>
-        <tbody>${state.billingHistory.map(h => `<tr><td>${fmtDate(h.date)}</td><td>${h.tier}</td><td class="amount">${h.amount === 0 ? '—' : fmtEUR(h.amount)}</td></tr>`).join('')}</tbody>
-      </table>
-    </div>
+      <h2>Factures</h2>
+      <div class="card-sub">Vos factures et l'historique de paiement sont gérés directement par Stripe — cliquez « Gérer mon abonnement » ci-dessus pour les consulter ou changer de moyen de paiement.</div>
+    </div>` : ''}
   `;
 }
 
@@ -2342,7 +2368,7 @@ function renderNav() {
   const cs = document.getElementById('connectorStatus');
   cs.className = 'connector-status' + (connected ? '' : ' off');
   cs.innerHTML = `<span class="dot"></span>${connected} connecteur${connected !== 1 ? 's' : ''} actif${connected !== 1 ? 's' : ''}`;
-  document.getElementById('planChipLabel').textContent = PLAN_META[state.plan.tier].name;
+  document.getElementById('planChipLabel').textContent = state.plan.tier ? PLAN_META[state.plan.tier].name : '—';
 }
 
 function render() {
@@ -2421,21 +2447,35 @@ function openConnectModal(type) {
     </div>
   `);
 }
-function openCheckoutModal(tier) {
+// Real Stripe Checkout — no card form here at all. Card numbers are entered on Stripe's
+// own hosted page (PCI compliance is Stripe's problem, never ours), so this just asks the
+// server for a Checkout Session URL and redirects the whole tab to it.
+async function openCheckoutModal(tier) {
   const p = PLAN_META[tier];
   openModal(`
     <h3>Passer au forfait ${p.name}</h3>
-    <div class="modal-sub">${p.price === 0 ? 'Aucun paiement requis.' : fmtEUR(p.price) + ' / mois, résiliable à tout moment.'}</div>
-    <div id="checkoutBody">
-      ${p.price > 0 ? `
-      <div class="field"><label>Numéro de carte</label><input type="text" placeholder="4242 4242 4242 4242" id="ccNum"></div>
-      <div class="row2">
-        <div class="field"><label>Expiration</label><input type="text" placeholder="12/28" id="ccExp"></div>
-        <div class="field"><label>CVC</label><input type="text" placeholder="123" id="ccCvc"></div>
-      </div>` : ''}
-      <div class="actions"><button class="btn" data-action="closeModal">Annuler</button><button class="btn primary" data-action="doCheckout" data-tier="${tier}">${p.price === 0 ? 'Confirmer' : 'Payer et activer'}</button></div>
+    <div class="modal-sub">${fmtEUR(p.price)} / mois, résiliable à tout moment.</div>
+    <div id="checkoutBody" style="text-align:center; padding:10px 0 4px;">
+      <span class="spinner" style="border-top-color:var(--brand); border-color:var(--rule-soft);"></span>
+      <div style="margin-top:10px; font-size:13px; color:var(--ink-soft);">Redirection vers le paiement sécurisé…</div>
     </div>
   `);
+  const session = getSession();
+  try {
+    const data = await apiRequest('/api/billing/checkout', { method: 'POST', token: session.token, body: { tier } });
+    window.location.href = data.url;
+  } catch (err) {
+    document.getElementById('checkoutBody').innerHTML = `<div class="auth-error">${escapeHTML(err.message)}</div><div class="actions" style="margin-top:12px;"><button class="btn" data-action="closeModal">Fermer</button></div>`;
+  }
+}
+async function openBillingPortal() {
+  const session = getSession();
+  try {
+    const data = await apiRequest('/api/billing/portal', { method: 'POST', token: session.token });
+    window.location.href = data.url;
+  } catch (err) {
+    toast(err.message, true);
+  }
 }
 function availableFieldOptions(catalog, existingFields) {
   const used = new Set(existingFields.map(f => `${f.source}::${f.key}`));
@@ -2821,11 +2861,21 @@ document.addEventListener('click', e => {
   if (action === 'openConnect') return openConnectModal(el.dataset.type);
   if (action === 'doConnect') {
     const type = el.dataset.type;
-    document.getElementById('connectBody').innerHTML = `<span class="spinner" style="border-top-color:var(--brand); border-color:var(--rule-soft);"></span> Connexion à ${CHANNEL_META[type].label}…`;
-    setTimeout(() => {
-      state.connectors.push({ id: uid(), type, label: CHANNEL_META[type].label, status: 'connected', connectedAt: new Date().toISOString(), lastSync: new Date().toISOString() });
-      persist(); closeModal(); render(); toast(`${CHANNEL_META[type].label} connecté.`);
-    }, 1100);
+    const body = document.getElementById('connectBody');
+    body.innerHTML = `<span class="spinner" style="border-top-color:var(--brand); border-color:var(--rule-soft);"></span> Connexion à ${CHANNEL_META[type].label}…`;
+    // The sync itself stays simulated (no real OAuth, no real Shopify/Etsy data) — what's
+    // real is this call: the server checks the account's plan channel limit before letting
+    // the connection register at all, same gate a genuine integration would need.
+    (async () => {
+      const session = getSession();
+      try {
+        await apiRequest('/api/connectors/channel', { method: 'POST', token: session.token, body: { type } });
+        state.connectors.push({ id: uid(), type, label: CHANNEL_META[type].label, status: 'connected', connectedAt: new Date().toISOString(), lastSync: new Date().toISOString() });
+        persist(); closeModal(); render(); toast(`${CHANNEL_META[type].label} connecté.`);
+      } catch (err) {
+        body.innerHTML = `<div class="auth-error">${escapeHTML(err.message)}</div><div class="actions" style="margin-top:12px;"><button class="btn" data-action="closeModal">Fermer</button></div>`;
+      }
+    })();
     return;
   }
   if (action === 'resync') {
@@ -2858,29 +2908,22 @@ document.addEventListener('click', e => {
     const c = state.connectors.find(c => c.id === el.dataset.id);
     state.connectors = state.connectors.filter(c => c.id !== el.dataset.id);
     persist(); render(); toast(`${c?.label ?? 'Connecteur'} déconnecté.`);
+    const session = getSession();
     if (c?.type === 'custom') {
-      const session = getSession();
       if (session && session.token) {
         apiRequest(`/api/connectors/${c.id}`, { method: 'DELETE', token: session.token })
           .catch(() => { toast('La clé API n\'a pas pu être révoquée côté serveur.', true); });
       }
+    } else if (c && session && session.token) {
+      // Frees the plan's channel slot server-side — otherwise a disconnect-then-reconnect
+      // cycle could never free up room under the limit.
+      apiRequest(`/api/connectors/channel/${c.type}`, { method: 'DELETE', token: session.token }).catch(() => {});
     }
     return;
   }
 
   if (action === 'openCheckout') return openCheckoutModal(el.dataset.tier);
-  if (action === 'doCheckout') {
-    const tier = el.dataset.tier;
-    const p = PLAN_META[tier];
-    const body = document.getElementById('checkoutBody');
-    body.innerHTML = `<div style="text-align:center; padding:24px 0;"><span class="spinner" style="border-top-color:var(--brand); border-color:var(--rule-soft);"></span><div style="margin-top:10px; font-size:13px; color:var(--ink-soft);">Traitement du paiement…</div></div>`;
-    setTimeout(() => {
-      state.plan = { tier, renewsAt: isoDaysAgo(-30) };
-      if (p.price > 0) state.billingHistory.unshift({ id: uid(), date: new Date().toISOString(), amount: p.price, tier: p.name });
-      persist(); closeModal(); render(); toast(`Forfait ${p.name} activé automatiquement.`);
-    }, 1300);
-    return;
-  }
+  if (action === 'openBillingPortal') return openBillingPortal();
 
   if (action === 'toggleTicket') {
     const t = state.savTickets.find(t => t.id === el.dataset.id);

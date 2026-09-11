@@ -12,6 +12,7 @@ Standard library only: no packages to install.
 from __future__ import annotations
 
 import hashlib
+import hmac
 import html
 import http.server
 import json
@@ -146,6 +147,88 @@ def branded_email_html(heading: str, body_html: str, footnote: str, cta_label: s
 # the terms/privacy policy change materially.
 CONSENT_VERSION = "2026-09-09"
 
+# Server-authoritative mirror of app.js's PLAN_META — limits are enforced HERE, not in the
+# client, since a client can always be edited to lie about its own plan. `channels` is the
+# max number of distinct sales channels that may be marked connected at once (see
+# connected_channels below); `orders` is the max real orders ingested per calendar month via
+# the one real inbound path (handle_ingest_order). None means unlimited. Keep in sync with
+# PLAN_META in app.js by hand — there's no shared source between the two runtimes here.
+PLAN_LIMITS = {
+    "decouverte": {"channels": 1, "orders": 50},
+    "multicanal": {"channels": 3, "orders": 500},
+    "croissance": {"channels": None, "orders": 3000},
+}
+# Accounts that use Comptoir free forever, by explicit one-off agreement — never billed,
+# never blocked by plan limits, regardless of what's in the users table. Keep this list
+# short and deliberate; it bypasses Stripe entirely for whoever's in it.
+FREE_FOREVER_EMAILS = {"killian.belabbes@gmail.com"}
+
+STRIPE_SECRET_KEY = os.environ.get("STRIPE_SECRET_KEY")
+STRIPE_WEBHOOK_SECRET = os.environ.get("STRIPE_WEBHOOK_SECRET")
+# One Stripe Price ID per tier (a recurring monthly price configured in the Stripe
+# dashboard) — maps PLAN_LIMITS keys to what Stripe actually needs to create a subscription.
+STRIPE_PRICE_IDS = {
+    "decouverte": os.environ.get("STRIPE_PRICE_DECOUVERTE"),
+    "multicanal": os.environ.get("STRIPE_PRICE_MULTICANAL"),
+    "croissance": os.environ.get("STRIPE_PRICE_CROISSANCE"),
+}
+
+
+def _stripe_flatten(data, prefix=""):
+    """Stripe's API takes form-encoded bodies with bracket-nested keys for nested data
+    (line_items[0][price]=... ), not JSON — this mirrors what Stripe's own client
+    libraries do, since there's no SDK here (stdlib only)."""
+    pairs = []
+    if isinstance(data, dict):
+        for k, v in data.items():
+            pairs.extend(_stripe_flatten(v, f"{prefix}[{k}]" if prefix else str(k)))
+    elif isinstance(data, list):
+        for i, v in enumerate(data):
+            pairs.extend(_stripe_flatten(v, f"{prefix}[{i}]"))
+    elif data is not None:
+        pairs.append((prefix, data))
+    return pairs
+
+
+def stripe_request(method: str, path: str, data: dict | None = None) -> dict:
+    if not STRIPE_SECRET_KEY:
+        raise ApiError(503, "Le paiement n'est pas encore configuré — réessayez plus tard.")
+    url = f"https://api.stripe.com/v1{path}"
+    body = urllib.parse.urlencode(_stripe_flatten(data or {})).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=body if method != "GET" else None,
+        method=method,
+        headers={"Authorization": f"Bearer {STRIPE_SECRET_KEY}", "Content-Type": "application/x-www-form-urlencoded"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        detail = e.read().decode("utf-8", "replace")
+        try:
+            message = json.loads(detail).get("error", {}).get("message") or detail
+        except json.JSONDecodeError:
+            message = detail
+        print(f"[Stripe a refusé la requête — {e.code}] {method} {path}\n{detail}", file=sys.stderr)
+        raise ApiError(502, f"Stripe : {message}")
+
+
+def resolve_plan(user_row) -> dict:
+    """The server-authoritative plan for an account — never trust anything the client
+    claims about its own plan (the app_state JSON blob is client-editable). Three sources,
+    in priority order: 1) the free-forever allowlist, always active Découverte, no Stripe
+    involved; 2) whatever's in the users table (kept in sync by grandfathering at migration
+    time and by the Stripe webhook from here on); 3) no plan at all for an account that has
+    neither — must subscribe via Checkout before the app will accept real usage."""
+    if user_row["email"] in FREE_FOREVER_EMAILS:
+        return {"tier": "decouverte", "status": "active", "renewsAt": None, "freeForever": True}
+    tier = user_row["plan_tier"]
+    status = user_row["plan_status"]
+    if not tier or status != "active":
+        return {"tier": None, "status": status or "inactive", "renewsAt": None, "freeForever": False}
+    return {"tier": tier, "status": status, "renewsAt": user_row["plan_renews_at"], "freeForever": False}
+
 
 def get_db():
     conn = sqlite3.connect(DB_PATH)
@@ -187,6 +270,12 @@ def init_db():
             created_at TEXT NOT NULL DEFAULT (datetime('now')),
             used_at TEXT
         );
+        CREATE TABLE IF NOT EXISTS connected_channels (
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            channel_type TEXT NOT NULL,
+            connected_at TEXT NOT NULL DEFAULT (datetime('now')),
+            PRIMARY KEY (user_id, channel_type)
+        );
     """)
     # Migration: existing deployments already have a `users` table from before consent
     # tracking existed — CREATE TABLE IF NOT EXISTS above leaves it untouched, so the new
@@ -197,7 +286,42 @@ def init_db():
         conn.execute("ALTER TABLE users ADD COLUMN consent_version TEXT")
     if "consent_accepted_at" not in existing_cols:
         conn.execute("ALTER TABLE users ADD COLUMN consent_accepted_at TEXT")
+    # Billing columns. plan_tier is deliberately NULLable with no DEFAULT: a brand-new
+    # signup gets NULL (no active plan — must subscribe via Stripe Checkout to use the
+    # app), which only works because this ALTER runs once, here, when these columns don't
+    # exist yet. That first run also grandfathers every account that already existed at
+    # that moment (see the backfill below) — accounts created after this migration has
+    # already run get NULL from SQLite's column default like anyone else.
+    is_first_billing_migration = "plan_tier" not in existing_cols
+    if is_first_billing_migration:
+        conn.execute("ALTER TABLE users ADD COLUMN plan_tier TEXT")
+        conn.execute("ALTER TABLE users ADD COLUMN plan_status TEXT")
+        conn.execute("ALTER TABLE users ADD COLUMN plan_renews_at TEXT")
+        conn.execute("ALTER TABLE users ADD COLUMN stripe_customer_id TEXT")
+        conn.execute("ALTER TABLE users ADD COLUMN stripe_subscription_id TEXT")
     conn.commit()
+    if is_first_billing_migration:
+        # Grandfather every account that existed before real billing did: freeze it on
+        # whatever plan it was already showing (read from its saved app_state — that's
+        # the only record of what it was on, since plan was purely client-side before
+        # today), active, with no Stripe link — it will never be charged or gated by a
+        # webhook, unlike every account created from here on. Falls back to the cheapest
+        # tier if a user has no saved state yet (mid-signup, or never logged in).
+        for row in conn.execute("SELECT id FROM users WHERE plan_tier IS NULL").fetchall():
+            tier = "decouverte"
+            state_row = conn.execute("SELECT data FROM app_state WHERE user_id = ?", (row["id"],)).fetchone()
+            if state_row:
+                try:
+                    saved_tier = json.loads(state_row["data"]).get("plan", {}).get("tier")
+                    if saved_tier in PLAN_LIMITS:
+                        tier = saved_tier
+                except (json.JSONDecodeError, AttributeError):
+                    pass
+            conn.execute(
+                "UPDATE users SET plan_tier = ?, plan_status = 'active' WHERE id = ?",
+                (tier, row["id"]),
+            )
+        conn.commit()
     conn.close()
 
 
@@ -239,7 +363,9 @@ def user_from_token(token: str):
         return None
     conn = get_db()
     row = conn.execute(
-        """SELECT u.id, u.email, u.consent_version, u.consent_accepted_at FROM sessions s
+        """SELECT u.id, u.email, u.consent_version, u.consent_accepted_at,
+                  u.plan_tier, u.plan_status, u.plan_renews_at, u.stripe_customer_id
+           FROM sessions s
            JOIN users u ON u.id = s.user_id
            WHERE s.token = ? AND s.created_at >= datetime('now', ?)""",
         (token, f"-{SESSION_TTL_DAYS} days"),
@@ -449,6 +575,7 @@ def handle_me(token):
     user = user_from_token(token)
     if not user:
         raise ApiError(401, "Session invalide ou expirée.")
+    user["plan"] = resolve_plan(user)
     return user
 
 
@@ -505,16 +632,83 @@ STATE_LOCK = threading.Lock()
 ORDER_STATUSES = {"livree", "preparation", "retour"}
 
 
+def require_active_plan(user):
+    """Raises 402 for any account with no active plan — free-forever and grandfathered
+    accounts always pass (resolve_plan gives them tier+status='active'); anyone who
+    signed up after real billing shipped and hasn't subscribed yet does not."""
+    plan = resolve_plan(user)
+    if not plan["tier"]:
+        raise ApiError(402, "Choisissez un forfait pour continuer — rendez-vous dans Facturation.")
+    return plan
+
+
+def count_connected_channels(conn, user_id: str) -> int:
+    return conn.execute("SELECT COUNT(*) FROM connected_channels WHERE user_id = ?", (user_id,)).fetchone()[0]
+
+
+def handle_connect_channel(token, body):
+    """Registers a sales channel as connected against the plan's channel limit. The sync
+    itself stays exactly as simulated as before (no real Shopify/Etsy/... API call exists
+    yet — disclosed honestly on the landing page); what's real here is the COUNT and the
+    limit it's checked against, which is the actual point of this endpoint."""
+    user = user_from_token(token)
+    if not user:
+        raise ApiError(401, "Session invalide ou expirée.")
+    plan = require_active_plan(user)
+    channel_type = str(body.get("type", "")).strip().lower()
+    if not channel_type:
+        raise ApiError(400, "Le type de canal est requis.")
+    conn = get_db()
+    already = conn.execute(
+        "SELECT 1 FROM connected_channels WHERE user_id = ? AND channel_type = ?", (user["id"], channel_type)
+    ).fetchone()
+    if not already:
+        limit = PLAN_LIMITS[plan["tier"]]["channels"]
+        current = count_connected_channels(conn, user["id"])
+        if limit is not None and current >= limit:
+            conn.close()
+            raise ApiError(402, f"Votre forfait autorise {limit} canal{'aux' if limit > 1 else ''} connecté{'s' if limit > 1 else ''} maximum — passez à un forfait supérieur pour en connecter davantage.")
+        conn.execute("INSERT INTO connected_channels (user_id, channel_type) VALUES (?, ?)", (user["id"], channel_type))
+        conn.commit()
+    conn.close()
+    return {"ok": True}
+
+
+def handle_disconnect_channel(token, channel_type):
+    user = user_from_token(token)
+    if not user:
+        raise ApiError(401, "Session invalide ou expirée.")
+    conn = get_db()
+    conn.execute("DELETE FROM connected_channels WHERE user_id = ? AND channel_type = ?", (user["id"], channel_type))
+    conn.commit()
+    conn.close()
+    return {"ok": True}
+
+
 def handle_create_connector(token, body):
     user = user_from_token(token)
     if not user:
         raise ApiError(401, "Session invalide ou expirée.")
+    plan = require_active_plan(user)
     label = str(body.get("label", "")).strip()
     if not label:
         raise ApiError(400, "Le nom de la plateforme est requis.")
     connector_id = secrets.token_hex(8)
     api_key = "cpt_live_" + secrets.token_hex(24)
     conn = get_db()
+    # Every custom connector the user creates shares one "custom" channel slot (this is a
+    # category of channel, like Shopify or Etsy, not one slot per store) — only check and
+    # consume the limit the first time, so a second custom connector doesn't need its own.
+    already = conn.execute(
+        "SELECT 1 FROM connected_channels WHERE user_id = ? AND channel_type = 'custom'", (user["id"],)
+    ).fetchone()
+    if not already:
+        limit = PLAN_LIMITS[plan["tier"]]["channels"]
+        current = count_connected_channels(conn, user["id"])
+        if limit is not None and current >= limit:
+            conn.close()
+            raise ApiError(402, f"Votre forfait autorise {limit} canal{'aux' if limit > 1 else ''} connecté{'s' if limit > 1 else ''} maximum — passez à un forfait supérieur pour en connecter davantage.")
+        conn.execute("INSERT INTO connected_channels (user_id, channel_type) VALUES (?, 'custom')", (user["id"],))
     conn.execute(
         "INSERT INTO api_keys (key, user_id, connector_id, label) VALUES (?, ?, ?, ?)",
         (api_key, user["id"], connector_id, label),
@@ -533,6 +727,11 @@ def handle_delete_connector(token, connector_id):
         "DELETE FROM api_keys WHERE user_id = ? AND connector_id = ?",
         (user["id"], connector_id),
     )
+    # Free the "custom" channel slot only once no custom connector is left — a user with
+    # two custom connectors deleting one should still count as using the slot.
+    remaining = conn.execute("SELECT COUNT(*) FROM api_keys WHERE user_id = ?", (user["id"],)).fetchone()[0]
+    if remaining == 0:
+        conn.execute("DELETE FROM connected_channels WHERE user_id = ? AND channel_type = 'custom'", (user["id"],))
     conn.commit()
     conn.close()
     return {"ok": True}
@@ -770,6 +969,26 @@ def handle_ingest_order(api_key, body):
                     result["backfilled"] = True
                 return result
 
+        # Plan limit on real inbound orders: count only orders this same path already
+        # created this calendar month (channelType == 'custom' is unique to this endpoint),
+        # not the account's whole order history — that includes older demo/seed data that
+        # predates real billing and shouldn't count against it.
+        user_row = conn.execute(
+            "SELECT id, email, plan_tier, plan_status FROM users WHERE id = ?", (user_id,)
+        ).fetchone()
+        if user_row:
+            plan = require_active_plan(user_row)
+            limit = PLAN_LIMITS[plan["tier"]]["orders"]
+            if limit is not None:
+                month_prefix = datetime.now(timezone.utc).strftime("%Y-%m")
+                this_month_count = sum(
+                    1 for o in orders
+                    if o.get("channelType") == "custom" and str(o.get("date", "")).startswith(month_prefix)
+                )
+                if this_month_count >= limit:
+                    conn.close()
+                    raise ApiError(402, f"Votre forfait autorise {limit} commandes par mois maximum via ce connecteur — passez à un forfait supérieur.")
+
         product_id = None
         if product_name:
             product_id = find_or_create_product(product_name)
@@ -812,6 +1031,132 @@ def handle_ingest_order(api_key, body):
     if status_note:
         result["note"] = status_note
     return result
+
+
+def _get_or_create_stripe_customer(conn, user) -> str:
+    if user["stripe_customer_id"]:
+        return user["stripe_customer_id"]
+    customer = stripe_request("POST", "/customers", {"email": user["email"], "metadata": {"comptoir_user_id": user["id"]}})
+    conn.execute("UPDATE users SET stripe_customer_id = ? WHERE id = ?", (customer["id"], user["id"]))
+    conn.commit()
+    return customer["id"]
+
+
+def handle_billing_checkout(token, body):
+    user = user_from_token(token)
+    if not user:
+        raise ApiError(401, "Session invalide ou expirée.")
+    if user["email"] in FREE_FOREVER_EMAILS:
+        raise ApiError(400, "Ce compte est en accès gratuit permanent — aucun paiement n'est nécessaire.")
+    tier = body.get("tier")
+    price_id = STRIPE_PRICE_IDS.get(tier)
+    if not price_id:
+        raise ApiError(400, "Forfait inconnu ou non configuré.")
+    conn = get_db()
+    customer_id = _get_or_create_stripe_customer(conn, user)
+    conn.close()
+    session = stripe_request("POST", "/checkout/sessions", {
+        "mode": "subscription",
+        "customer": customer_id,
+        "line_items": [{"price": price_id, "quantity": 1}],
+        # Query string before the hash, never after: app.js's router reads location.hash
+        # as the route path verbatim (#facturation), so anything appended past it there
+        # would corrupt the route match — location.search is where a returning query
+        # param belongs, same convention as the password-reset link.
+        "success_url": f"{PUBLIC_BASE_URL}/?checkout=success#facturation",
+        "cancel_url": f"{PUBLIC_BASE_URL}/?checkout=cancel#facturation",
+        "metadata": {"comptoir_user_id": user["id"], "comptoir_tier": tier},
+        "subscription_data": {"metadata": {"comptoir_user_id": user["id"], "comptoir_tier": tier}},
+    })
+    return {"url": session["url"]}
+
+
+def handle_billing_portal(token):
+    user = user_from_token(token)
+    if not user:
+        raise ApiError(401, "Session invalide ou expirée.")
+    if not user["stripe_customer_id"]:
+        raise ApiError(400, "Aucun abonnement à gérer pour l'instant.")
+    session = stripe_request("POST", "/billing_portal/sessions", {
+        "customer": user["stripe_customer_id"],
+        "return_url": f"{PUBLIC_BASE_URL}/#facturation",
+    })
+    return {"url": session["url"]}
+
+
+def verify_stripe_signature(payload: bytes, sig_header: str | None) -> bool:
+    if not STRIPE_WEBHOOK_SECRET or not sig_header:
+        return False
+    try:
+        parts = dict(p.split("=", 1) for p in sig_header.split(",") if "=" in p)
+        t, v1 = parts["t"], parts["v1"]
+    except (KeyError, ValueError):
+        return False
+    # 5-minute tolerance against replay of an old, previously-valid signed request.
+    try:
+        if abs(time.time() - int(t)) > 300:
+            return False
+    except ValueError:
+        return False
+    expected = hmac.new(STRIPE_WEBHOOK_SECRET.encode("utf-8"), f"{t}.".encode("utf-8") + payload, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected, v1)
+
+
+def _tier_from_stripe_price_id(price_id: str) -> str | None:
+    for tier, pid in STRIPE_PRICE_IDS.items():
+        if pid and pid == price_id:
+            return tier
+    return None
+
+
+def handle_stripe_webhook(payload: bytes, sig_header: str | None):
+    if not verify_stripe_signature(payload, sig_header):
+        raise ApiError(400, "Signature Stripe invalide.")
+    event = json.loads(payload.decode("utf-8"))
+    event_type = event.get("type")
+    obj = event.get("data", {}).get("object", {})
+    conn = get_db()
+
+    if event_type == "checkout.session.completed":
+        user_id = obj.get("metadata", {}).get("comptoir_user_id")
+        tier = obj.get("metadata", {}).get("comptoir_tier")
+        subscription_id = obj.get("subscription")
+        customer_id = obj.get("customer")
+        if user_id and tier:
+            conn.execute(
+                "UPDATE users SET plan_tier = ?, plan_status = 'active', stripe_subscription_id = ?, stripe_customer_id = COALESCE(stripe_customer_id, ?) WHERE id = ?",
+                (tier, subscription_id, customer_id, user_id),
+            )
+            conn.commit()
+
+    elif event_type in ("customer.subscription.updated", "customer.subscription.created"):
+        subscription_id = obj.get("id")
+        items = obj.get("items", {}).get("data", [])
+        price_id = items[0]["price"]["id"] if items and items[0].get("price") else None
+        tier = _tier_from_stripe_price_id(price_id) if price_id else None
+        status = obj.get("status")  # active | past_due | canceled | unpaid | trialing...
+        period_end = obj.get("current_period_end")
+        renews_at = datetime.fromtimestamp(period_end, tz=timezone.utc).isoformat() if period_end else None
+        plan_status = "active" if status == "active" else status
+        if tier:
+            conn.execute(
+                "UPDATE users SET plan_tier = ?, plan_status = ?, plan_renews_at = ? WHERE stripe_subscription_id = ?",
+                (tier, plan_status, renews_at, subscription_id),
+            )
+        else:
+            conn.execute(
+                "UPDATE users SET plan_status = ?, plan_renews_at = ? WHERE stripe_subscription_id = ?",
+                (plan_status, renews_at, subscription_id),
+            )
+        conn.commit()
+
+    elif event_type == "customer.subscription.deleted":
+        subscription_id = obj.get("id")
+        conn.execute("UPDATE users SET plan_status = 'canceled' WHERE stripe_subscription_id = ?", (subscription_id,))
+        conn.commit()
+
+    conn.close()
+    return {"ok": True}
 
 
 class Handler(http.server.SimpleHTTPRequestHandler):
@@ -867,6 +1212,19 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if not path.startswith("/api/"):
             self.send_error(404)
             return
+        # Stripe's webhook needs the RAW request body to verify its signature — parsing it
+        # as JSON first (like every other route below) would still work for reading the
+        # event, but the signature is computed over the exact bytes Stripe sent, so this
+        # route reads and verifies before any JSON parsing happens.
+        if path == "/api/stripe/webhook":
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+                raw = self.rfile.read(length) if length else b""
+                return self._send_json(200, handle_stripe_webhook(raw, self.headers.get("Stripe-Signature")))
+            except ApiError as e:
+                return self._send_json(e.status, {"error": e.message})
+            except Exception as e:  # pragma: no cover
+                return self._send_server_error(e)
         try:
             body = self._read_json_body()
             if path == "/api/signup":
@@ -881,8 +1239,14 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 return self._send_json(200, handle_logout(self._bearer_token()))
             if path == "/api/connectors/custom":
                 return self._send_json(200, handle_create_connector(self._bearer_token(), body))
+            if path == "/api/connectors/channel":
+                return self._send_json(200, handle_connect_channel(self._bearer_token(), body))
             if path == "/api/ingest/orders":
                 return self._send_json(200, handle_ingest_order(self._bearer_token(), body))
+            if path == "/api/billing/checkout":
+                return self._send_json(200, handle_billing_checkout(self._bearer_token(), body))
+            if path == "/api/billing/portal":
+                return self._send_json(200, handle_billing_portal(self._bearer_token()))
             raise ApiError(404, "Route inconnue.")
         except ApiError as e:
             self._send_json(e.status, {"error": e.message})
@@ -918,12 +1282,14 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
     def do_DELETE(self):
         path = urllib.parse.urlparse(self.path).path
-        match = re.match(r"^/api/connectors/([^/]+)$", path)
-        if not match:
-            self.send_error(404)
-            return
         try:
-            return self._send_json(200, handle_delete_connector(self._bearer_token(), match.group(1)))
+            channel_match = re.match(r"^/api/connectors/channel/([^/]+)$", path)
+            if channel_match:
+                return self._send_json(200, handle_disconnect_channel(self._bearer_token(), channel_match.group(1)))
+            connector_match = re.match(r"^/api/connectors/([^/]+)$", path)
+            if connector_match:
+                return self._send_json(200, handle_delete_connector(self._bearer_token(), connector_match.group(1)))
+            self.send_error(404)
         except ApiError as e:
             self._send_json(e.status, {"error": e.message})
         except Exception as e:  # pragma: no cover
