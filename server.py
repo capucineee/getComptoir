@@ -11,6 +11,7 @@ Standard library only: no packages to install.
 """
 from __future__ import annotations
 
+import base64
 import hashlib
 import hmac
 import html
@@ -28,7 +29,7 @@ import unicodedata
 import urllib.error
 import urllib.parse
 import urllib.request
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 # On most hosts the container's own filesystem is wiped on every redeploy, which would
@@ -221,13 +222,71 @@ def resolve_plan(user_row) -> dict:
     involved; 2) whatever's in the users table (kept in sync by grandfathering at migration
     time and by the Stripe webhook from here on); 3) no plan at all for an account that has
     neither — must subscribe via Checkout before the app will accept real usage."""
-    if user_row["email"] in FREE_FOREVER_EMAILS:
+    # Accessed via .get() on a plain dict rather than sqlite3.Row's bracket access
+    # throughout this function — a caller's SELECT that forgets a column (this has
+    # happened more than once) then loses that one field instead of throwing a 500 on
+    # every plan check in the app, including ones nowhere near whatever query was wrong.
+    row = dict(user_row)
+    if row.get("email") in FREE_FOREVER_EMAILS:
         return {"tier": "decouverte", "status": "active", "renewsAt": None, "freeForever": True}
-    tier = user_row["plan_tier"]
-    status = user_row["plan_status"]
+    tier = row.get("plan_tier")
+    status = row.get("plan_status")
     if not tier or status != "active":
         return {"tier": None, "status": status or "inactive", "renewsAt": None, "freeForever": False}
-    return {"tier": tier, "status": status, "renewsAt": user_row["plan_renews_at"], "freeForever": False}
+    return {"tier": tier, "status": status, "renewsAt": row.get("plan_renews_at"), "freeForever": False}
+
+
+# Real Shopify integration: an OAuth app any merchant can install on her own shop (no
+# App Store listing needed — installed directly via a link Comptoir generates), plus order
+# webhooks that feed the same _ingest_order_core() the custom connector already uses.
+# Needs a free Shopify Partners account + an app created there; see handle_shopify_install.
+SHOPIFY_API_KEY = os.environ.get("SHOPIFY_API_KEY")
+SHOPIFY_API_SECRET = os.environ.get("SHOPIFY_API_SECRET")
+SHOPIFY_SCOPES = os.environ.get("SHOPIFY_SCOPES") or "read_orders,read_products"
+SHOPIFY_API_VERSION = os.environ.get("SHOPIFY_API_VERSION") or "2025-01"
+SHOPIFY_SHOP_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9-]*\.myshopify\.com$")
+SHOPIFY_OAUTH_STATE_TTL_MINUTES = 10
+SHOPIFY_WEBHOOK_TOPICS = ["orders/create", "orders/updated", "orders/cancelled", "app/uninstalled"]
+
+
+def shopify_admin_request(shop_domain: str, access_token: str, method: str, path: str, data: dict | None = None) -> dict:
+    url = f"https://{shop_domain}/admin/api/{SHOPIFY_API_VERSION}{path}"
+    body = json.dumps(data).encode("utf-8") if data is not None else None
+    req = urllib.request.Request(
+        url, data=body, method=method,
+        headers={"X-Shopify-Access-Token": access_token, "Content-Type": "application/json", "Accept": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            raw = resp.read()
+            return json.loads(raw) if raw else {}
+    except urllib.error.HTTPError as e:
+        detail = e.read().decode("utf-8", "replace")
+        print(f"[Shopify Admin API a refusé — {e.code}] {method} {path} ({shop_domain})\n{detail}", file=sys.stderr)
+        raise ApiError(502, "Shopify a refusé cette requête.")
+
+
+def verify_shopify_hmac(params: dict, hmac_value: str) -> bool:
+    """Verifies Shopify's own signature on OAuth callback query params — proves the
+    request genuinely came from Shopify and wasn't forged. Shopify's documented scheme:
+    sort every param except hmac/signature, join as a query string, HMAC-SHA256 it with
+    the app's client secret."""
+    if not SHOPIFY_API_SECRET or not hmac_value:
+        return False
+    pairs = sorted((k, v) for k, v in params.items() if k not in ("hmac", "signature"))
+    message = "&".join(f"{k}={v}" for k, v in pairs)
+    expected = hmac.new(SHOPIFY_API_SECRET.encode("utf-8"), message.encode("utf-8"), hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected, hmac_value)
+
+
+def verify_shopify_webhook_hmac(raw_body: bytes, hmac_header: str | None) -> bool:
+    """Webhook deliveries are signed differently from the OAuth callback: base64 of an
+    HMAC-SHA256 over the exact raw request body."""
+    if not SHOPIFY_API_SECRET or not hmac_header:
+        return False
+    digest = hmac.new(SHOPIFY_API_SECRET.encode("utf-8"), raw_body, hashlib.sha256).digest()
+    expected = base64.b64encode(digest).decode("utf-8")
+    return hmac.compare_digest(expected, hmac_header)
 
 
 def get_db():
@@ -275,6 +334,19 @@ def init_db():
             channel_type TEXT NOT NULL,
             connected_at TEXT NOT NULL DEFAULT (datetime('now')),
             PRIMARY KEY (user_id, channel_type)
+        );
+        CREATE TABLE IF NOT EXISTS shopify_shops (
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            shop_domain TEXT NOT NULL UNIQUE,
+            access_token TEXT NOT NULL,
+            connected_at TEXT NOT NULL DEFAULT (datetime('now')),
+            PRIMARY KEY (user_id, shop_domain)
+        );
+        CREATE TABLE IF NOT EXISTS shopify_oauth_states (
+            state TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            shop_domain TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
         );
     """)
     # Migration: existing deployments already have a `users` table from before consent
@@ -680,6 +752,12 @@ def handle_disconnect_channel(token, channel_type):
         raise ApiError(401, "Session invalide ou expirée.")
     conn = get_db()
     conn.execute("DELETE FROM connected_channels WHERE user_id = ? AND channel_type = ?", (user["id"], channel_type))
+    if channel_type == "shopify":
+        # Forget the stored access token too — Shopify has no explicit "revoke" call, but
+        # there's no reason to keep a live credential around once the merchant disconnects
+        # from our side. Doesn't touch her install in the Shopify admin (she can remove
+        # the app there separately; that fires app/uninstalled, which cleans this up too).
+        conn.execute("DELETE FROM shopify_shops WHERE user_id = ?", (user["id"],))
     conn.commit()
     conn.close()
     return {"ok": True}
@@ -847,8 +925,15 @@ def handle_ingest_order(api_key, body):
     if not row:
         conn.close()
         raise ApiError(401, "Clé API invalide ou révoquée.")
-    user_id, connector_id = row["user_id"], row["connector_id"]
+    return _ingest_order_core(conn, row["user_id"], "custom", row["connector_id"], body)
 
+
+def _ingest_order_core(conn, user_id: str, channel_type: str, connector_id: str, body: dict):
+    """Shared by every real inbound order path — today the custom API connector
+    (handle_ingest_order) and Shopify's order webhooks (handle_shopify_webhook). Takes
+    the resolved account + which channel this came from; everything else (field-alias
+    matching, status inference, product auto-creation, stock sync, duplicate/backfill
+    detection, plan limit) is identical regardless of source."""
     if not isinstance(body, dict):
         conn.close()
         raise ApiError(400, "Le corps de la requête doit être un objet JSON.")
@@ -883,7 +968,15 @@ def handle_ingest_order(api_key, body):
 
     customer_name = _pick_field(body, FIELD_ALIASES["customerName"])
     if not customer_name and isinstance(body.get("customer"), dict):
-        customer_name = _pick_field(body["customer"], ["name", "fullName", "full_name", "nom"])
+        customer_obj = body["customer"]
+        customer_name = _pick_field(customer_obj, ["name", "fullName", "full_name", "nom"])
+        if not customer_name:
+            # Shopify (and others) split the name into first_name/last_name rather than
+            # a single combined field.
+            first = _pick_field(customer_obj, ["first_name", "firstName"])
+            last = _pick_field(customer_obj, ["last_name", "lastName"])
+            combined = " ".join(str(p) for p in (first, last) if p)
+            customer_name = combined or None
     customer_name = str(customer_name).strip() if customer_name not in (None, "") else "Client"
 
     product_name = _pick_field(body, FIELD_ALIASES["productName"])
@@ -939,24 +1032,55 @@ def handle_ingest_order(api_key, body):
         if external_id:
             existing = next((o for o in orders if o.get("externalId") == external_id), None)
             if existing:
-                # An order ingested before product auto-creation existed (or before this
-                # product had a name Comptoir recognized) can be missing its product link.
-                # Re-sending the same order (same externalId) is exactly how a merchant
-                # backfills that — fix the link now instead of just reporting "duplicate".
-                backfilled = False
-                if not existing.get("productId") and product_name:
-                    pid = find_or_create_product(product_name)
-                    existing["productId"] = pid
-                    # This sale was never reflected in stock the first time (no product
-                    # was linked yet) — apply it now, same rule as a fresh order.
-                    product = next((p for p in products if p["id"] == pid), None)
-                    if product is not None:
-                        existing_qty = existing.get("quantity") or 1
-                        current = product.get("stock", 0) or 0
-                        existing_status = existing.get("status")
-                        product["stock"] = current + existing_qty if existing_status == "retour" else max(0, current - existing_qty)
-                    backfilled = True
-                if backfilled:
+                # A platform with real webhooks (Shopify: created → paid → fulfilled →
+                # refunded...) sends the SAME order multiple times as it moves through its
+                # lifecycle, each time with the same externalId — this is where that gets
+                # reflected, not just a "duplicate, ignored" no-op. A merchant re-sending an
+                # order by hand to backfill a missing product link goes through the same path.
+                changed = False
+
+                def _adjust_stock(product_id_, qty, order_status, reverse=False):
+                    if not product_id_:
+                        return
+                    product = next((p for p in products if p["id"] == product_id_), None)
+                    if product is None:
+                        return
+                    delta = qty if order_status == "retour" else -qty
+                    if reverse:
+                        delta = -delta
+                    product["stock"] = max(0, (product.get("stock", 0) or 0) + delta)
+
+                had_product_id = bool(existing.get("productId"))
+                if not had_product_id and product_name:
+                    existing["productId"] = find_or_create_product(product_name)
+                    changed = True
+
+                old_status = existing.get("status")
+                old_quantity = existing.get("quantity") or 1
+                if existing.get("productId"):
+                    if had_product_id and (old_status != status or old_quantity != quantity):
+                        # Already had a product linked, so stock was already adjusted once
+                        # for this order — reverse that old effect, apply the current one.
+                        # Correct however many times status/quantity change across
+                        # deliveries, not just the first.
+                        _adjust_stock(existing["productId"], old_quantity, old_status, reverse=True)
+                        _adjust_stock(existing["productId"], quantity, status)
+                    elif not had_product_id:
+                        # Just got its first product link — this sale was never reflected
+                        # in stock at all yet, apply it now.
+                        _adjust_stock(existing["productId"], quantity, status)
+
+                if existing.get("status") != status:
+                    existing["status"] = status
+                    changed = True
+                if existing.get("quantity") != quantity:
+                    existing["quantity"] = quantity
+                    changed = True
+                if round(existing.get("amount", 0) or 0, 2) != round(amount, 2):
+                    existing["amount"] = round(amount, 2)
+                    changed = True
+
+                if changed:
                     new_data = json.dumps(data)
                     conn.execute(
                         "UPDATE app_state SET data = ?, updated_at = datetime('now') WHERE user_id = ?",
@@ -964,17 +1088,16 @@ def handle_ingest_order(api_key, body):
                     )
                     conn.commit()
                 conn.close()
-                result = {"ok": True, "duplicate": True, "orderId": existing["id"], "orderNumber": existing["orderNumber"]}
-                if backfilled:
-                    result["backfilled"] = True
-                return result
+                return {"ok": True, "duplicate": True, "updated": changed, "orderId": existing["id"], "orderNumber": existing["orderNumber"]}
 
-        # Plan limit on real inbound orders: count only orders this same path already
-        # created this calendar month (channelType == 'custom' is unique to this endpoint),
-        # not the account's whole order history — that includes older demo/seed data that
-        # predates real billing and shouldn't count against it.
+        # Plan limit on real inbound orders: count only orders that came through a real
+        # ingestion path this calendar month — identified by having a connectorId at all,
+        # which only a real path ever sets (never the demo/seed data pre-loaded before real
+        # billing existed, or an account's own manual entries). Deliberately not scoped to
+        # this one channel_type: the limit is one number per account across every real
+        # channel, custom API and Shopify (and whatever's next) together.
         user_row = conn.execute(
-            "SELECT id, email, plan_tier, plan_status FROM users WHERE id = ?", (user_id,)
+            "SELECT id, email, plan_tier, plan_status, plan_renews_at FROM users WHERE id = ?", (user_id,)
         ).fetchone()
         if user_row:
             plan = require_active_plan(user_row)
@@ -983,11 +1106,11 @@ def handle_ingest_order(api_key, body):
                 month_prefix = datetime.now(timezone.utc).strftime("%Y-%m")
                 this_month_count = sum(
                     1 for o in orders
-                    if o.get("channelType") == "custom" and str(o.get("date", "")).startswith(month_prefix)
+                    if o.get("connectorId") and str(o.get("date", "")).startswith(month_prefix)
                 )
                 if this_month_count >= limit:
                     conn.close()
-                    raise ApiError(402, f"Votre forfait autorise {limit} commandes par mois maximum via ce connecteur — passez à un forfait supérieur.")
+                    raise ApiError(402, f"Votre forfait autorise {limit} commandes par mois maximum — passez à un forfait supérieur.")
 
         product_id = None
         if product_name:
@@ -1004,7 +1127,7 @@ def handle_ingest_order(api_key, body):
         order = {
             "id": secrets.token_hex(8),
             "orderNumber": next_number,
-            "channelType": "custom",
+            "channelType": channel_type,
             "connectorId": connector_id,
             "productId": product_id,
             "customer": customer_name,
@@ -1159,6 +1282,178 @@ def handle_stripe_webhook(payload: bytes, sig_header: str | None):
     return {"ok": True}
 
 
+def handle_shopify_install(token, body):
+    """Step 1 of OAuth: the merchant has typed her shop's .myshopify.com domain into
+    Comptoir — this checks she's allowed to connect one more channel, then hands back the
+    Shopify authorize URL to redirect the whole tab to (same shape as Stripe Checkout)."""
+    if not SHOPIFY_API_KEY or not SHOPIFY_API_SECRET:
+        raise ApiError(503, "La connexion Shopify n'est pas encore configurée — réessayez plus tard.")
+    user = user_from_token(token)
+    if not user:
+        raise ApiError(401, "Session invalide ou expirée.")
+    plan = require_active_plan(user)
+    shop = str(body.get("shop", "")).strip().lower()
+    if not SHOPIFY_SHOP_RE.match(shop):
+        raise ApiError(400, "Adresse de boutique invalide — attendu : votre-boutique.myshopify.com")
+
+    conn = get_db()
+    already = conn.execute(
+        "SELECT 1 FROM connected_channels WHERE user_id = ? AND channel_type = 'shopify'", (user["id"],)
+    ).fetchone()
+    if not already:
+        limit = PLAN_LIMITS[plan["tier"]]["channels"]
+        current = count_connected_channels(conn, user["id"])
+        if limit is not None and current >= limit:
+            conn.close()
+            raise ApiError(402, f"Votre forfait autorise {limit} canal{'aux' if limit > 1 else ''} connecté{'s' if limit > 1 else ''} maximum — passez à un forfait supérieur pour en connecter davantage.")
+
+    state = secrets.token_hex(24)
+    conn.execute(
+        "INSERT INTO shopify_oauth_states (state, user_id, shop_domain) VALUES (?, ?, ?)",
+        (state, user["id"], shop),
+    )
+    conn.commit()
+    conn.close()
+
+    params = {
+        "client_id": SHOPIFY_API_KEY,
+        "scope": SHOPIFY_SCOPES,
+        "redirect_uri": f"{PUBLIC_BASE_URL}/api/connectors/shopify/callback",
+        "state": state,
+    }
+    return {"url": f"https://{shop}/admin/oauth/authorize?{urllib.parse.urlencode(params)}"}
+
+
+def handle_shopify_callback(params: dict):
+    """Step 2: Shopify redirects the merchant's browser back here after she approves the
+    install. Not called by our own frontend — verified independently (Shopify's own HMAC
+    on the query string, plus our own single-use state token) since anyone could otherwise
+    hit this URL directly. Returns a redirect target (success or error) for the caller to
+    send the browser to; never raises ApiError, because there's no JSON client waiting on
+    the other end of a browser navigation."""
+    shop = str(params.get("shop", "")).strip().lower()
+    code = params.get("code")
+    state = params.get("state")
+    hmac_value = params.get("hmac")
+
+    if not SHOPIFY_SHOP_RE.match(shop) or not code or not state:
+        return f"{PUBLIC_BASE_URL}/?shopify=error#connecteurs"
+    if not verify_shopify_hmac(params, hmac_value):
+        print("[Shopify callback] signature HMAC invalide — requête rejetée.", file=sys.stderr)
+        return f"{PUBLIC_BASE_URL}/?shopify=error#connecteurs"
+
+    conn = get_db()
+    row = conn.execute(
+        "SELECT user_id, shop_domain, created_at FROM shopify_oauth_states WHERE state = ?", (state,)
+    ).fetchone()
+    if row:
+        conn.execute("DELETE FROM shopify_oauth_states WHERE state = ?", (state,))  # single-use
+        conn.commit()
+    if not row or row["shop_domain"] != shop:
+        conn.close()
+        return f"{PUBLIC_BASE_URL}/?shopify=error#connecteurs"
+    try:
+        created_at = datetime.fromisoformat(row["created_at"] + "+00:00")
+        if datetime.now(timezone.utc) - created_at > timedelta(minutes=SHOPIFY_OAUTH_STATE_TTL_MINUTES):
+            conn.close()
+            return f"{PUBLIC_BASE_URL}/?shopify=error#connecteurs"
+    except ValueError:
+        pass
+    user_id = row["user_id"]
+
+    user_row = conn.execute("SELECT id, email, plan_tier, plan_status, plan_renews_at FROM users WHERE id = ?", (user_id,)).fetchone()
+    if not user_row:
+        conn.close()
+        return f"{PUBLIC_BASE_URL}/?shopify=error#connecteurs"
+    try:
+        plan = require_active_plan(user_row)
+        already = conn.execute(
+            "SELECT 1 FROM connected_channels WHERE user_id = ? AND channel_type = 'shopify'", (user_id,)
+        ).fetchone()
+        if not already:
+            limit = PLAN_LIMITS[plan["tier"]]["channels"]
+            current = count_connected_channels(conn, user_id)
+            if limit is not None and current >= limit:
+                conn.close()
+                return f"{PUBLIC_BASE_URL}/?shopify=limit#connecteurs"
+    except ApiError:
+        conn.close()
+        return f"{PUBLIC_BASE_URL}/?shopify=error#connecteurs"
+
+    # Exchange the one-time code for a real access token — this is the one HTTP call in
+    # this whole flow that actually proves we're allowed to read this shop's orders.
+    try:
+        token_resp = urllib.request.urlopen(
+            urllib.request.Request(
+                f"https://{shop}/admin/oauth/access_token",
+                data=json.dumps({"client_id": SHOPIFY_API_KEY, "client_secret": SHOPIFY_API_SECRET, "code": code}).encode("utf-8"),
+                method="POST",
+                headers={"Content-Type": "application/json", "Accept": "application/json"},
+            ),
+            timeout=15,
+        )
+        access_token = json.loads(token_resp.read()).get("access_token")
+    except Exception:
+        traceback.print_exc(file=sys.stderr)
+        access_token = None
+    if not access_token:
+        conn.close()
+        return f"{PUBLIC_BASE_URL}/?shopify=error#connecteurs"
+
+    conn.execute(
+        """INSERT INTO shopify_shops (user_id, shop_domain, access_token) VALUES (?, ?, ?)
+           ON CONFLICT(user_id, shop_domain) DO UPDATE SET access_token = excluded.access_token""",
+        (user_id, shop, access_token),
+    )
+    conn.execute(
+        "INSERT OR IGNORE INTO connected_channels (user_id, channel_type) VALUES (?, 'shopify')", (user_id,)
+    )
+    conn.commit()
+    conn.close()
+
+    # Subscribe to the events that keep Comptoir's copy of this shop's orders current.
+    # Registering is best-effort per topic — one failing (e.g. a scope Shopify didn't
+    # grant) shouldn't undo an otherwise-successful connection.
+    for topic in SHOPIFY_WEBHOOK_TOPICS:
+        try:
+            shopify_admin_request(shop, access_token, "POST", "/webhooks.json", {
+                "webhook": {"topic": topic, "address": f"{PUBLIC_BASE_URL}/api/connectors/shopify/webhook", "format": "json"}
+            })
+        except ApiError:
+            pass
+
+    return f"{PUBLIC_BASE_URL}/?shopify=success#connecteurs"
+
+
+def handle_shopify_webhook(headers, raw_body: bytes):
+    if not verify_shopify_webhook_hmac(raw_body, headers.get("X-Shopify-Hmac-Sha256")):
+        raise ApiError(401, "Signature Shopify invalide.")
+    shop = headers.get("X-Shopify-Shop-Domain", "")
+    topic = headers.get("X-Shopify-Topic", "")
+    conn = get_db()
+    row = conn.execute("SELECT user_id FROM shopify_shops WHERE shop_domain = ?", (shop,)).fetchone()
+    if not row:
+        conn.close()
+        # Not an error from Shopify's point of view (e.g. a webhook arriving just after a
+        # disconnect) — 200 tells it to stop retrying rather than hammering a dead link.
+        return {"ok": True, "ignored": True}
+    user_id = row["user_id"]
+
+    if topic == "app/uninstalled":
+        conn.execute("DELETE FROM shopify_shops WHERE user_id = ? AND shop_domain = ?", (user_id, shop))
+        conn.execute("DELETE FROM connected_channels WHERE user_id = ? AND channel_type = 'shopify'", (user_id,))
+        conn.commit()
+        conn.close()
+        return {"ok": True}
+
+    try:
+        order = json.loads(raw_body.decode("utf-8"))
+    except json.JSONDecodeError:
+        conn.close()
+        raise ApiError(400, "Corps de webhook JSON invalide.")
+    return _ingest_order_core(conn, user_id, "shopify", shop, order)
+
+
 class Handler(http.server.SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=ROOT, **kwargs)
@@ -1225,6 +1520,16 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 return self._send_json(e.status, {"error": e.message})
             except Exception as e:  # pragma: no cover
                 return self._send_server_error(e)
+        # Same reasoning as Stripe's webhook above — Shopify signs the exact raw bytes.
+        if path == "/api/connectors/shopify/webhook":
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+                raw = self.rfile.read(length) if length else b""
+                return self._send_json(200, handle_shopify_webhook(self.headers, raw))
+            except ApiError as e:
+                return self._send_json(e.status, {"error": e.message})
+            except Exception as e:  # pragma: no cover
+                return self._send_server_error(e)
         try:
             body = self._read_json_body()
             if path == "/api/signup":
@@ -1247,6 +1552,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 return self._send_json(200, handle_billing_checkout(self._bearer_token(), body))
             if path == "/api/billing/portal":
                 return self._send_json(200, handle_billing_portal(self._bearer_token()))
+            if path == "/api/connectors/shopify/install":
+                return self._send_json(200, handle_shopify_install(self._bearer_token(), body))
             raise ApiError(404, "Route inconnue.")
         except ApiError as e:
             self._send_json(e.status, {"error": e.message})
@@ -1254,7 +1561,19 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self._send_server_error(e)
 
     def do_GET(self):
-        path = urllib.parse.urlparse(self.path).path
+        parsed = urllib.parse.urlparse(self.path)
+        path = parsed.path
+        if path == "/api/connectors/shopify/callback":
+            # Shopify navigates the merchant's actual browser here — this always ends in
+            # a redirect back into the app, never a JSON response (there's no fetch() on
+            # the other end of a top-level page navigation).
+            params = {k: v[0] for k, v in urllib.parse.parse_qs(parsed.query).items()}
+            target = handle_shopify_callback(params)
+            self.send_response(302)
+            self.send_header("Location", target)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
         if path == "/api/me":
             try:
                 return self._send_json(200, handle_me(self._bearer_token()))

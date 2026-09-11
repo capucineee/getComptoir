@@ -785,16 +785,16 @@ function renderLanding() {
             <h2 class="l-section-h">Compatible avec vos plateformes</h2>
           </div>
           <div class="l-channel-row">
+            <div class="l-channel-chip"><span class="sw" style="background:var(--cat-shopify)"></span>Shopify — disponible aujourd'hui</div>
             <div class="l-channel-chip"><span class="sw" style="background:var(--cat-custom)"></span>Connecteur personnalisé — disponible aujourd'hui</div>
           </div>
           <div class="l-channel-row">
-            <div class="l-channel-chip"><span class="sw" style="background:var(--cat-shopify)"></span>Shopify</div>
             <div class="l-channel-chip"><span class="sw" style="background:var(--cat-etsy)"></span>Etsy</div>
             <div class="l-channel-chip"><span class="sw" style="background:var(--cat-instagram)"></span>Instagram Shop</div>
             <div class="l-channel-chip"><span class="sw" style="background:var(--cat-woocommerce)"></span>WooCommerce</div>
             <div class="l-channel-chip plus">+ toute plateforme via API</div>
           </div>
-          <p class="l-channel-note">Le connecteur personnalisé fonctionne dès aujourd'hui avec n'importe quel site capable d'envoyer ses commandes par API — y compris Shopify, Etsy ou WooCommerce via leurs propres automatisations. Des intégrations natives dédiées sont en cours de développement.</p>
+          <p class="l-channel-note">Shopify se connecte réellement via OAuth — commandes synchronisées automatiquement dès qu'elles arrivent. Le connecteur personnalisé fonctionne avec n'importe quel autre site capable d'envoyer ses commandes par API. Les autres intégrations natives sont en cours de développement.</p>
         </div>
       </section>
 
@@ -1094,6 +1094,25 @@ async function boot() {
     history.replaceState(null, '', location.pathname + location.hash);
     if (checkoutParam === 'success') toast('Abonnement activé — merci !');
     else if (checkoutParam === 'cancel') toast('Paiement annulé — aucun changement.', true);
+  }
+
+  // Returning from Shopify's OAuth consent page: ?shopify=success|error|limit#connecteurs.
+  // The server already recorded the real connection (or didn't); this just brings the
+  // local display in sync and reports what happened, then scrubs the query.
+  const shopifyParam = new URLSearchParams(location.search).get('shopify');
+  if (shopifyParam) {
+    history.replaceState(null, '', location.pathname + location.hash);
+    if (shopifyParam === 'success') {
+      if (!state.connectors.some(c => c.type === 'shopify')) {
+        state.connectors.push({ id: uid(), type: 'shopify', label: CHANNEL_META.shopify.label, status: 'connected', connectedAt: new Date().toISOString(), lastSync: new Date().toISOString() });
+        persist();
+      }
+      toast('Shopify connecté.');
+    } else if (shopifyParam === 'limit') {
+      toast('Votre forfait ne permet pas de connecter un canal de plus — voir Facturation.', true);
+    } else if (shopifyParam === 'error') {
+      toast('La connexion à Shopify a échoué — réessayez.', true);
+    }
   }
 }
 
@@ -2439,11 +2458,26 @@ function openStockConflictModal(product, connector) {
 }
 function openConnectModal(type) {
   const meta = CHANNEL_META[type];
+  if (type === 'shopify') return openShopifyConnectModal();
   openModal(`
     <h3>Connecter ${meta.label}</h3>
     <div class="modal-sub">Simulation de l'autorisation OAuth — aucune vraie connexion n'est établie.</div>
     <div id="connectBody" style="text-align:center; padding:20px 0;">
       <button class="btn primary" data-action="doConnect" data-type="${type}" style="width:100%; justify-content:center;">Autoriser l'accès à ${meta.label}</button>
+    </div>
+  `);
+}
+
+// The one real platform connection: asks for the shop's .myshopify.com domain, then hands
+// the whole tab to Shopify's own OAuth consent page — same real-redirect shape as Stripe
+// Checkout, nothing simulated past this point.
+function openShopifyConnectModal() {
+  openModal(`
+    <h3>Connecter Shopify</h3>
+    <div class="modal-sub">Vous serez redirigée vers Shopify pour autoriser l'accès — connexion réelle, pas une simulation.</div>
+    <div id="connectBody">
+      <div class="field"><label>Adresse de votre boutique</label><input type="text" id="shopifyDomain" placeholder="votre-boutique.myshopify.com"></div>
+      <div class="actions"><button class="btn" data-action="closeModal">Annuler</button><button class="btn primary" data-action="doShopifyConnect">Continuer vers Shopify</button></div>
     </div>
   `);
 }
@@ -2863,7 +2897,8 @@ document.addEventListener('click', e => {
     const type = el.dataset.type;
     const body = document.getElementById('connectBody');
     body.innerHTML = `<span class="spinner" style="border-top-color:var(--brand); border-color:var(--rule-soft);"></span> Connexion à ${CHANNEL_META[type].label}…`;
-    // The sync itself stays simulated (no real OAuth, no real Shopify/Etsy data) — what's
+    // The sync itself stays simulated for these platforms (no real OAuth, no real data —
+    // Shopify is the one exception, handled separately by doShopifyConnect below) — what's
     // real is this call: the server checks the account's plan channel limit before letting
     // the connection register at all, same gate a genuine integration would need.
     (async () => {
@@ -2872,6 +2907,26 @@ document.addEventListener('click', e => {
         await apiRequest('/api/connectors/channel', { method: 'POST', token: session.token, body: { type } });
         state.connectors.push({ id: uid(), type, label: CHANNEL_META[type].label, status: 'connected', connectedAt: new Date().toISOString(), lastSync: new Date().toISOString() });
         persist(); closeModal(); render(); toast(`${CHANNEL_META[type].label} connecté.`);
+      } catch (err) {
+        body.innerHTML = `<div class="auth-error">${escapeHTML(err.message)}</div><div class="actions" style="margin-top:12px;"><button class="btn" data-action="closeModal">Fermer</button></div>`;
+      }
+    })();
+    return;
+  }
+  if (action === 'doShopifyConnect') {
+    const input = document.getElementById('shopifyDomain');
+    const shop = input.value.trim().toLowerCase();
+    const body = document.getElementById('connectBody');
+    if (!/^[a-z0-9][a-z0-9-]*\.myshopify\.com$/.test(shop)) {
+      toast('Adresse de boutique invalide — attendu : votre-boutique.myshopify.com', true);
+      return;
+    }
+    body.innerHTML = `<div style="text-align:center; padding:20px 0;"><span class="spinner" style="border-top-color:var(--brand); border-color:var(--rule-soft);"></span><div style="margin-top:10px; font-size:13px; color:var(--ink-soft);">Redirection vers Shopify…</div></div>`;
+    (async () => {
+      const session = getSession();
+      try {
+        const data = await apiRequest('/api/connectors/shopify/install', { method: 'POST', token: session.token, body: { shop } });
+        window.location.href = data.url;
       } catch (err) {
         body.innerHTML = `<div class="auth-error">${escapeHTML(err.message)}</div><div class="actions" style="margin-top:12px;"><button class="btn" data-action="closeModal">Fermer</button></div>`;
       }
