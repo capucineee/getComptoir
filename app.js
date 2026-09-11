@@ -913,7 +913,11 @@ function renderAuth(mode) {
         <div id="authError"></div>
         <form id="authForm">
           <div class="field"><label>Adresse email</label><input type="email" id="authEmail" placeholder="vous@boutique.fr" required></div>
-          <div class="field"><label>Mot de passe</label><input type="password" id="authPassword" placeholder="••••••••" required minlength="8"></div>
+          <div class="field">
+            <label>Mot de passe</label>
+            <input type="password" id="authPassword" placeholder="••••••••" required minlength="8">
+            ${!isSignup ? `<button type="button" class="auth-forgot" data-action="authSwitch" data-mode="reset-request">Mot de passe oublié ?</button>` : ''}
+          </div>
           ${isSignup ? `<div class="field"><label>Confirmer le mot de passe</label><input type="password" id="authPassword2" placeholder="••••••••" required minlength="8"></div>` : ''}
           ${isSignup ? `<label style="display:flex; align-items:flex-start; gap:8px; font-size:12.5px; color:var(--ink-soft); margin:2px 0 14px; cursor:pointer;">
             <input type="checkbox" id="authAcceptTerms" required style="margin-top:2px; flex-shrink:0;">
@@ -956,6 +960,88 @@ function renderAuth(mode) {
       errBox.innerHTML = `<div class="auth-error">${escapeHTML(err.message)}</div>`;
       submitBtn.disabled = false;
       submitBtn.textContent = isSignup ? 'Créer mon compte' : 'Se connecter';
+    }
+  });
+}
+
+function renderPasswordResetRequest() {
+  document.getElementById('appRoot').style.display = 'none';
+  document.getElementById('authRoot').innerHTML = `
+    <div class="auth-wrap">
+      <div class="auth-card">
+        <div class="auth-brand">${AUTH_MARK}<span>Comptoir</span></div>
+        <h1>Mot de passe oublié</h1>
+        <div class="auth-sub">Indiquez votre adresse email, on vous envoie un lien pour en choisir un nouveau.</div>
+        <div id="authError"></div>
+        <form id="resetRequestForm">
+          <div class="field"><label>Adresse email</label><input type="email" id="resetEmail" placeholder="vous@boutique.fr" required></div>
+          <button type="submit" class="btn primary" id="resetRequestBtn">Envoyer le lien</button>
+        </form>
+        <div class="auth-switch">
+          <button type="button" data-action="authSwitch" data-mode="login">Retour à la connexion</button>
+        </div>
+      </div>
+    </div>
+  `;
+  document.getElementById('resetRequestForm').addEventListener('submit', async e => {
+    e.preventDefault();
+    const email = document.getElementById('resetEmail').value.trim();
+    const errBox = document.getElementById('authError');
+    const btn = document.getElementById('resetRequestBtn');
+    errBox.innerHTML = '';
+    if (!email) { errBox.innerHTML = '<div class="auth-error">Merci de renseigner votre adresse email.</div>'; return; }
+    btn.disabled = true;
+    btn.textContent = 'Envoi…';
+    try {
+      const data = await apiRequest('/api/password-reset/request', { method: 'POST', body: { email } });
+      document.getElementById('resetRequestForm').innerHTML = `<div class="auth-success">${escapeHTML(data.message)}<br><span style="color:var(--ink-soft); font-size:12.5px;">Pensez à vérifier vos spams.</span></div>`;
+    } catch (err) {
+      errBox.innerHTML = `<div class="auth-error">${escapeHTML(err.message)}</div>`;
+      btn.disabled = false;
+      btn.textContent = 'Envoyer le lien';
+    }
+  });
+}
+
+function renderPasswordResetConfirm(token) {
+  document.getElementById('appRoot').style.display = 'none';
+  document.getElementById('authRoot').innerHTML = `
+    <div class="auth-wrap">
+      <div class="auth-card">
+        <div class="auth-brand">${AUTH_MARK}<span>Comptoir</span></div>
+        <h1>Nouveau mot de passe</h1>
+        <div class="auth-sub">Choisissez un nouveau mot de passe pour votre compte.</div>
+        <div id="authError"></div>
+        <form id="resetConfirmForm">
+          <div class="field"><label>Nouveau mot de passe</label><input type="password" id="resetPassword" placeholder="••••••••" required minlength="8"></div>
+          <div class="field"><label>Confirmer le mot de passe</label><input type="password" id="resetPassword2" placeholder="••••••••" required minlength="8"></div>
+          <button type="submit" class="btn primary" id="resetConfirmBtn">Valider le nouveau mot de passe</button>
+        </form>
+        <div class="auth-switch">
+          <button type="button" data-action="authSwitch" data-mode="login">Retour à la connexion</button>
+        </div>
+      </div>
+    </div>
+  `;
+  document.getElementById('resetConfirmForm').addEventListener('submit', async e => {
+    e.preventDefault();
+    const password = document.getElementById('resetPassword').value;
+    const password2 = document.getElementById('resetPassword2').value;
+    const errBox = document.getElementById('authError');
+    const btn = document.getElementById('resetConfirmBtn');
+    errBox.innerHTML = '';
+    if (password !== password2) { errBox.innerHTML = '<div class="auth-error">Les mots de passe ne correspondent pas.</div>'; return; }
+    btn.disabled = true;
+    btn.textContent = 'Validation…';
+    try {
+      const data = await apiRequest('/api/password-reset/confirm', { method: 'POST', body: { token, password } });
+      setSession(data.token, data.email);
+      toast('Mot de passe mis à jour.');
+      renderTransition(boot);
+    } catch (err) {
+      errBox.innerHTML = `<div class="auth-error">${escapeHTML(err.message)}</div>`;
+      btn.disabled = false;
+      btn.textContent = 'Valider le nouveau mot de passe';
     }
   });
 }
@@ -2502,7 +2588,10 @@ document.addEventListener('click', e => {
   }
   if (action === 'closeModal') return closeModal();
 
-  if (action === 'authSwitch') return renderAuth(el.dataset.mode);
+  if (action === 'authSwitch') {
+    if (el.dataset.mode === 'reset-request') return renderPasswordResetRequest();
+    return renderAuth(el.dataset.mode);
+  }
   if (action === 'logout') {
     const session = getSession();
     if (session && session.token) apiRequest('/api/logout', { method: 'POST', token: session.token }).catch(() => {});
@@ -2882,7 +2971,16 @@ function renderKeepFocus(id) {
 
 /* ---------- init ---------- */
 paintTheme();
-renderSplash(boot);
+// A password-reset email links back here with ?resetToken=... — catch it before the
+// normal splash/boot flow so it works whether or not the visitor is currently logged in,
+// then scrub it from the visible URL so refreshing or using back doesn't resubmit it.
+const resetTokenParam = new URLSearchParams(location.search).get('resetToken');
+if (resetTokenParam) {
+  history.replaceState(null, '', location.pathname + location.hash);
+  renderPasswordResetConfirm(resetTokenParam);
+} else {
+  renderSplash(boot);
+}
 
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js').catch(() => {}));

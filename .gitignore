@@ -3,3 +3,4 @@ comptoir.db-journal
 __pycache__/
 *.pyc
 .DS_Store
+.claude/

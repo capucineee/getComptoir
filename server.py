@@ -17,6 +17,7 @@ import json
 import os
 import re
 import secrets
+import smtplib
 import sqlite3
 import sys
 import threading
@@ -25,6 +26,8 @@ import traceback
 import unicodedata
 import urllib.parse
 from datetime import datetime, timezone
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 # On most hosts the container's own filesystem is wiped on every redeploy, which would
@@ -35,6 +38,43 @@ DB_PATH = os.environ.get("COMPTOIR_DB_PATH") or os.path.join(ROOT, "comptoir.db"
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 PBKDF2_ITERATIONS = 100_000
 SESSION_TTL_DAYS = 30
+PASSWORD_RESET_TTL_MINUTES = 60
+# Where reset links point. Kept as an explicit env var rather than trusting the request's
+# Host header (which can be spoofed or, behind a proxy, wrong) — same reasoning as
+# COMPTOIR_DB_PATH above.
+PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL") or "https://getcomptoir.fr").rstrip("/")
+# Real outbound email needs an SMTP relay (Brevo, Mailgun, a Gmail app password...) — set
+# these on the host once you have one. Until they're set, send_email() logs the message
+# (reset link included) to stderr instead of sending, so local dev and an unconfigured
+# deploy keep working rather than crashing every request that needs to email someone.
+SMTP_HOST = os.environ.get("SMTP_HOST")
+SMTP_PORT = int(os.environ.get("SMTP_PORT", "587"))
+SMTP_USER = os.environ.get("SMTP_USER")
+SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD")
+SMTP_FROM = os.environ.get("SMTP_FROM") or (f"Comptoir <{SMTP_USER}>" if SMTP_USER else "Comptoir <no-reply@getcomptoir.fr>")
+
+
+def send_email(to_addr: str, subject: str, text_body: str, html_body: str | None = None):
+    if not SMTP_HOST or not SMTP_USER or not SMTP_PASSWORD:
+        print(f"[email non envoyé — SMTP non configuré] à={to_addr} sujet={subject!r}\n{text_body}", file=sys.stderr)
+        return
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = subject
+    msg["From"] = SMTP_FROM
+    msg["To"] = to_addr
+    msg.attach(MIMEText(text_body, "plain", "utf-8"))
+    if html_body:
+        msg.attach(MIMEText(html_body, "html", "utf-8"))
+    try:
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=10) as server:
+            server.starttls()
+            server.login(SMTP_USER, SMTP_PASSWORD)
+            server.sendmail(SMTP_FROM, [to_addr], msg.as_string())
+    except Exception:
+        # Never let a flaky SMTP relay turn into a 500 for the caller (e.g. signup, which
+        # doesn't yet send an email but will) — log it, the request that triggered it
+        # still succeeds from the user's point of view where that's the right trade-off.
+        traceback.print_exc(file=sys.stderr)
 # The version accepted at signup is decided HERE, not sent by the client — trusting a
 # client-supplied version would let anyone claim they accepted a version they never actually
 # saw. Bump this string (matches the "Dernière mise à jour" date on the legal pages) whenever
@@ -75,6 +115,12 @@ def init_db():
             connector_id TEXT NOT NULL,
             label TEXT NOT NULL,
             created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE TABLE IF NOT EXISTS password_resets (
+            token TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            used_at TEXT
         );
     """)
     # Migration: existing deployments already have a `users` table from before consent
@@ -218,6 +264,106 @@ def handle_login(body):
     clear_login_failures(email)
     token = create_session(row["id"])
     return {"token": token, "email": row["email"]}
+
+
+# Same in-memory sliding-window shape as the login limiter above, keyed by email — keeps
+# someone from mass-emailing a stranger's inbox with reset links, or from hammering the
+# token-guessing surface (moot given secrets.token_hex(32), but cheap to bound anyway).
+RESET_ATTEMPTS = {}
+RESET_LOCK = threading.Lock()
+MAX_RESET_ATTEMPTS = 5
+RESET_WINDOW_SECONDS = 3600  # 1 hour
+
+
+def check_reset_rate_limit(email):
+    now = time.time()
+    with RESET_LOCK:
+        attempts = [t for t in RESET_ATTEMPTS.get(email, []) if now - t < RESET_WINDOW_SECONDS]
+        RESET_ATTEMPTS[email] = attempts
+        if len(attempts) >= MAX_RESET_ATTEMPTS:
+            return False
+        attempts.append(now)
+        return True
+
+
+def handle_password_reset_request(body):
+    require_fields(body, ["email"])
+    email = body["email"].strip().lower()
+
+    # Always return the same generic response whether or not the account exists, and
+    # whether or not it was rate-limited — anything else (a distinct error message, a
+    # different status code) would let an attacker enumerate which emails have accounts
+    # just by watching how the response changes.
+    generic = {"ok": True, "message": "Si un compte existe avec cette adresse, un email vient d'être envoyé avec un lien de réinitialisation."}
+
+    if not EMAIL_RE.match(email) or not check_reset_rate_limit(email):
+        return generic
+
+    conn = get_db()
+    user = conn.execute("SELECT id, email FROM users WHERE email = ?", (email,)).fetchone()
+    if not user:
+        conn.close()
+        return generic
+
+    token = secrets.token_hex(32)
+    conn.execute("INSERT INTO password_resets (token, user_id) VALUES (?, ?)", (token, user["id"]))
+    conn.commit()
+    conn.close()
+
+    reset_link = f"{PUBLIC_BASE_URL}/?resetToken={token}"
+    text_body = (
+        f"Bonjour,\n\n"
+        f"Une demande de réinitialisation de mot de passe a été faite pour ce compte Comptoir "
+        f"({user['email']}).\n\n"
+        f"Pour choisir un nouveau mot de passe, ouvrez ce lien (valable {PASSWORD_RESET_TTL_MINUTES} minutes) :\n"
+        f"{reset_link}\n\n"
+        f"Si vous n'êtes pas à l'origine de cette demande, ignorez cet email — votre mot de passe actuel reste inchangé.\n\n"
+        f"— Comptoir"
+    )
+    html_body = (
+        f"<p>Bonjour,</p>"
+        f"<p>Une demande de réinitialisation de mot de passe a été faite pour ce compte Comptoir "
+        f"(<strong>{user['email']}</strong>).</p>"
+        f"<p><a href=\"{reset_link}\" style=\"background:#146356;color:#fff;padding:11px 20px;border-radius:8px;text-decoration:none;font-weight:600;display:inline-block;\">Choisir un nouveau mot de passe</a></p>"
+        f"<p style=\"color:#8A9186;font-size:13px;\">Ce lien est valable {PASSWORD_RESET_TTL_MINUTES} minutes. "
+        f"Si vous n'êtes pas à l'origine de cette demande, ignorez cet email.</p>"
+        f"<p>— Comptoir</p>"
+    )
+    send_email(user["email"], "Réinitialisez votre mot de passe Comptoir", text_body, html_body)
+    return generic
+
+
+def handle_password_reset_confirm(body):
+    require_fields(body, ["token", "password"])
+    token = body["token"].strip()
+    password = body["password"]
+    if len(password) < 8:
+        raise ApiError(400, "Le mot de passe doit contenir au moins 8 caractères.")
+
+    conn = get_db()
+    row = conn.execute(
+        """SELECT user_id FROM password_resets
+           WHERE token = ? AND used_at IS NULL AND created_at >= datetime('now', ?)""",
+        (token, f"-{PASSWORD_RESET_TTL_MINUTES} minutes"),
+    ).fetchone()
+    if not row:
+        conn.close()
+        raise ApiError(400, "Ce lien de réinitialisation est invalide ou a expiré — refaites une demande.")
+
+    user_id = row["user_id"]
+    pw_hash, pw_salt = hash_password(password)
+    conn.execute("UPDATE users SET password_hash = ?, password_salt = ? WHERE id = ?", (pw_hash, pw_salt, user_id))
+    conn.execute("UPDATE password_resets SET used_at = datetime('now') WHERE token = ?", (token,))
+    # A password reset is exactly the moment to invalidate every existing session — if
+    # someone else's session was the reason the password needed changing, this is what
+    # actually locks them out, not just the new password on its own.
+    conn.execute("DELETE FROM sessions WHERE user_id = ?", (user_id,))
+    conn.commit()
+    user = conn.execute("SELECT email FROM users WHERE id = ?", (user_id,)).fetchone()
+    conn.close()
+
+    new_token = create_session(user_id)
+    return {"token": new_token, "email": user["email"]}
 
 
 def handle_logout(token):
@@ -657,6 +803,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 return self._send_json(200, handle_signup(body))
             if path == "/api/login":
                 return self._send_json(200, handle_login(body))
+            if path == "/api/password-reset/request":
+                return self._send_json(200, handle_password_reset_request(body))
+            if path == "/api/password-reset/confirm":
+                return self._send_json(200, handle_password_reset_confirm(body))
             if path == "/api/logout":
                 return self._send_json(200, handle_logout(self._bearer_token()))
             if path == "/api/connectors/custom":
