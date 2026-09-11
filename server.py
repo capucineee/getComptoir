@@ -55,27 +55,41 @@ SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD")
 SMTP_FROM = os.environ.get("SMTP_FROM") or (f"Comptoir <{SMTP_USER}>" if SMTP_USER else "Comptoir <no-reply@getcomptoir.fr>")
 
 
-class _IPv4SMTP(smtplib.SMTP):
+def _ipv4_connect(host, port, timeout):
     # Railway's containers (like many PaaS hosts) have no outbound IPv6 route, but
     # smtp.gmail.com resolves to both an IPv4 and an IPv6 address — the stdlib's default
     # socket.create_connection() tries whichever getaddrinfo() returns first, and an IPv6
     # attempt with no route fails immediately with "Network is unreachable" (OSError 101)
     # rather than falling through cleanly. Forcing AF_INET here is the standard fix.
+    last_err = None
+    for family, socktype, proto, _, sockaddr in socket.getaddrinfo(host, port, socket.AF_INET, socket.SOCK_STREAM):
+        sock = None
+        try:
+            sock = socket.socket(family, socktype, proto)
+            if timeout is not None:
+                sock.settimeout(timeout)
+            sock.connect(sockaddr)
+            return sock
+        except OSError as e:
+            last_err = e
+            if sock is not None:
+                sock.close()
+    raise last_err or OSError(f"Impossible de joindre {host}:{port} en IPv4.")
+
+
+class _IPv4SMTP(smtplib.SMTP):
+    """Plain SMTP, upgraded to TLS via STARTTLS after connecting — used for port 587."""
     def _get_socket(self, host, port, timeout):
-        last_err = None
-        for family, socktype, proto, _, sockaddr in socket.getaddrinfo(host, port, socket.AF_INET, socket.SOCK_STREAM):
-            sock = None
-            try:
-                sock = socket.socket(family, socktype, proto)
-                if timeout is not None:
-                    sock.settimeout(timeout)
-                sock.connect(sockaddr)
-                return sock
-            except OSError as e:
-                last_err = e
-                if sock is not None:
-                    sock.close()
-        raise last_err or OSError(f"Impossible de joindre {host}:{port} en IPv4.")
+        return _ipv4_connect(host, port, timeout)
+
+
+class _IPv4SMTP_SSL(smtplib.SMTP_SSL):
+    """TLS from the very first byte — used for port 465, in case a host that blocks
+    STARTTLS-on-587 still allows outbound 465 (some do, having only blocked the port most
+    associated with spam relaying)."""
+    def _get_socket(self, host, port, timeout):
+        sock = _ipv4_connect(host, port, timeout)
+        return self.context.wrap_socket(sock, server_hostname=host)
 
 
 def send_email(to_addr: str, subject: str, text_body: str, html_body: str | None = None):
@@ -90,10 +104,15 @@ def send_email(to_addr: str, subject: str, text_body: str, html_body: str | None
     if html_body:
         msg.attach(MIMEText(html_body, "html", "utf-8"))
     try:
-        with _IPv4SMTP(SMTP_HOST, SMTP_PORT, timeout=10) as server:
-            server.starttls()
-            server.login(SMTP_USER, SMTP_PASSWORD)
-            server.sendmail(SMTP_FROM, [to_addr], msg.as_string())
+        if SMTP_PORT == 465:
+            with _IPv4SMTP_SSL(SMTP_HOST, SMTP_PORT, timeout=10) as server:
+                server.login(SMTP_USER, SMTP_PASSWORD)
+                server.sendmail(SMTP_FROM, [to_addr], msg.as_string())
+        else:
+            with _IPv4SMTP(SMTP_HOST, SMTP_PORT, timeout=10) as server:
+                server.starttls()
+                server.login(SMTP_USER, SMTP_PASSWORD)
+                server.sendmail(SMTP_FROM, [to_addr], msg.as_string())
     except Exception:
         # Never let a flaky SMTP relay turn into a 500 for the caller (e.g. signup, which
         # doesn't yet send an email but will) — log it, the request that triggered it
