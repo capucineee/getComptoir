@@ -12,6 +12,7 @@ Standard library only: no packages to install.
 from __future__ import annotations
 
 import hashlib
+import html
 import http.server
 import json
 import os
@@ -89,6 +90,54 @@ def send_email(to_addr: str, subject: str, text_body: str, html_body: str | None
         # which doesn't yet send an email but will) — log it, the request that triggered
         # it still succeeds from the user's point of view where that's the right trade-off.
         traceback.print_exc(file=sys.stderr)
+
+
+def branded_email_html(heading: str, body_html: str, footnote: str, cta_label: str | None = None, cta_link: str | None = None) -> str:
+    """Shared look for every transactional email (this reset email today; welcome/receipt/
+    alert emails later) — table-based layout with inline styles only, since email clients
+    (Outlook especially) ignore <style> blocks and most CSS layout. Colors match the brand
+    tokens in styles.css (kept as literals here, not shared — a mail client can't read a
+    stylesheet or CSS variables) and the logo is the hosted PNG icon, since inline SVG
+    renders inconsistently across mail clients."""
+    logo_url = f"{PUBLIC_BASE_URL}/icons/icon-192.png"
+    cta_html = "" if not cta_label else f"""
+        <tr><td style="padding:6px 32px 8px;">
+          <table role="presentation" cellpadding="0" cellspacing="0"><tr>
+            <td style="border-radius:8px; background:#146356;">
+              <a href="{cta_link}" style="display:inline-block; padding:12px 22px; font-size:14px; font-weight:700; color:#FFFFFF; text-decoration:none;">{cta_label}</a>
+            </td>
+          </tr></table>
+        </td></tr>"""
+    return f"""<!doctype html>
+<html lang="fr">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>{html.escape(heading)}</title></head>
+<body style="margin:0; padding:0; background:#F3F4F1; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#F3F4F1; padding:32px 16px;">
+    <tr><td align="center">
+      <table role="presentation" width="480" cellpadding="0" cellspacing="0" style="max-width:480px; width:100%; background:#FFFFFF; border-radius:14px; border:1px solid #E1E3DC;">
+        <tr><td style="padding:28px 32px 0;">
+          <table role="presentation" cellpadding="0" cellspacing="0"><tr>
+            <td style="padding-right:9px;"><img src="{logo_url}" width="26" height="26" alt="" style="display:block; border-radius:6px;"></td>
+            <td style="font-size:17px; font-weight:800; color:#1B211D; letter-spacing:-0.02em; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">Comptoir</td>
+          </tr></table>
+        </td></tr>
+        <tr><td style="padding:24px 32px 8px;">
+          <h1 style="margin:0 0 14px; font-size:20px; line-height:1.3; color:#1B211D; font-weight:800;">{html.escape(heading)}</h1>
+          <div style="font-size:14.5px; line-height:1.65; color:#566058;">{body_html}</div>
+        </td></tr>{cta_html}
+        <tr><td style="padding:18px 32px 28px;">
+          <p style="margin:0; font-size:12.5px; line-height:1.6; color:#8A9186;">{footnote}</p>
+        </td></tr>
+        <tr><td style="padding:16px 32px; border-top:1px solid #E1E3DC;">
+          <p style="margin:0; font-size:12px; color:#8A9186;">Comptoir — Vendez partout. Comptez ici.<br><a href="{PUBLIC_BASE_URL}/" style="color:#8A9186;">getcomptoir.fr</a></p>
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>"""
+
+
 # The version accepted at signup is decided HERE, not sent by the client — trusting a
 # client-supplied version would let anyone claim they accepted a version they never actually
 # saw. Bump this string (matches the "Dernière mise à jour" date on the legal pages) whenever
@@ -334,14 +383,19 @@ def handle_password_reset_request(body):
         f"Si vous n'êtes pas à l'origine de cette demande, ignorez cet email — votre mot de passe actuel reste inchangé.\n\n"
         f"— Comptoir"
     )
-    html_body = (
-        f"<p>Bonjour,</p>"
-        f"<p>Une demande de réinitialisation de mot de passe a été faite pour ce compte Comptoir "
-        f"(<strong>{user['email']}</strong>).</p>"
-        f"<p><a href=\"{reset_link}\" style=\"background:#146356;color:#fff;padding:11px 20px;border-radius:8px;text-decoration:none;font-weight:600;display:inline-block;\">Choisir un nouveau mot de passe</a></p>"
-        f"<p style=\"color:#8A9186;font-size:13px;\">Ce lien est valable {PASSWORD_RESET_TTL_MINUTES} minutes. "
-        f"Si vous n'êtes pas à l'origine de cette demande, ignorez cet email.</p>"
-        f"<p>— Comptoir</p>"
+    html_body = branded_email_html(
+        heading="Réinitialisez votre mot de passe",
+        body_html=(
+            f"<p style=\"margin:0 0 14px;\">Une demande de réinitialisation a été faite pour le compte "
+            f"<strong style=\"color:#1B211D;\">{html.escape(user['email'])}</strong>.</p>"
+            f"<p style=\"margin:0;\">Cliquez sur le bouton ci-dessous pour choisir un nouveau mot de passe.</p>"
+        ),
+        cta_label="Choisir un nouveau mot de passe",
+        cta_link=reset_link,
+        footnote=(
+            f"Ce lien est valable {PASSWORD_RESET_TTL_MINUTES} minutes. Si vous n'êtes pas à l'origine "
+            f"de cette demande, ignorez cet email — votre mot de passe actuel reste inchangé."
+        ),
     )
     send_email(user["email"], "Réinitialisez votre mot de passe Comptoir", text_body, html_body)
     return generic
