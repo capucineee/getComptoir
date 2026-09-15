@@ -969,6 +969,10 @@ function renderAuth(mode) {
     try {
       const body = isSignup ? { email, password, acceptTerms: true } : { email, password };
       const data = await apiRequest(isSignup ? '/api/signup' : '/api/login', { method: 'POST', body });
+      // The one conversion that matters on the landing funnel — a real account created,
+      // not just a pageview. window.umami is undefined if the script is blocked (an
+      // ad-blocker, a slow connection) — never let that break signup itself.
+      if (isSignup) window.umami?.track('signup');
       setSession(data.token, data.email);
       renderTransition(boot);
     } catch (err) {
