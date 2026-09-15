@@ -482,7 +482,36 @@ def handle_signup(body):
     conn.commit()
     conn.close()
     token = create_session(user_id)
+    send_welcome_email(email)
     return {"token": token, "email": email}
+
+
+def send_welcome_email(email: str):
+    text_body = (
+        f"Bienvenue sur Comptoir !\n\n"
+        f"Votre compte ({email}) est créé. Trois choses à faire pour démarrer :\n\n"
+        f"1. Choisissez un forfait — Facturation, dans le menu de gauche.\n"
+        f"2. Connectez votre premier canal de vente — Connecteurs.\n"
+        f"3. Ajoutez vos produits — Mon catalogue.\n\n"
+        f"Ouvrez l'app : {PUBLIC_BASE_URL}/\n\n"
+        f"Une question ? Répondez simplement à cet email.\n\n"
+        f"— Comptoir"
+    )
+    html_body = branded_email_html(
+        heading="Bienvenue sur Comptoir",
+        body_html=(
+            f"<p style=\"margin:0 0 14px;\">Votre compte (<strong style=\"color:#1B211D;\">{html.escape(email)}</strong>) est créé. Trois choses à faire pour démarrer :</p>"
+            f"<ol style=\"margin:0; padding-left:20px;\">"
+            f"<li style=\"margin-bottom:6px;\">Choisissez un forfait — <b>Facturation</b>, dans le menu de gauche.</li>"
+            f"<li style=\"margin-bottom:6px;\">Connectez votre premier canal de vente — <b>Connecteurs</b>.</li>"
+            f"<li>Ajoutez vos produits — <b>Mon catalogue</b>.</li>"
+            f"</ol>"
+        ),
+        cta_label="Ouvrir Comptoir",
+        cta_link=f"{PUBLIC_BASE_URL}/",
+        footnote="Une question ? Répondez simplement à cet email.",
+    )
+    send_email(email, "Bienvenue sur Comptoir", text_body, html_body)
 
 
 # Login has no other brute-force protection (no account lockout, no CAPTCHA), so a bare
