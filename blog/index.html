@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Blog — Comptoir</title>
+<meta name="description" content="Conseils pratiques pour vendre en ligne : marge, stock multicanal, comptabilité simplifiée — par l'équipe de Comptoir.">
+<link rel="canonical" href="https://getcomptoir.fr/blog/">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Comptoir">
+<meta property="og:title" content="Blog — Comptoir">
+<meta property="og:description" content="Conseils pratiques pour vendre en ligne : marge, stock multicanal, comptabilité simplifiée.">
+<meta property="og:url" content="https://getcomptoir.fr/blog/">
+<meta property="og:locale" content="fr_FR">
+<link rel="icon" href="/icons/icon-192.png">
+<link rel="stylesheet" href="/styles.css">
+<style>
+  body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--font); line-height: 1.6; }
+  .topbar {
+    position: sticky; top: 0; z-index: 10; display: flex; align-items: center; gap: 10px;
+    padding: 14px 24px; background: var(--surface); border-bottom: 1px solid var(--rule-soft);
+  }
+  .topbar svg { width: 24px; height: 24px; flex-shrink: 0; }
+  .topbar .name { font-weight: 700; font-size: 15px; }
+  .topbar .back { margin-left: auto; color: var(--ink-soft); font-size: 13px; text-decoration: none; }
+  .topbar .back:hover { color: var(--brand); }
+
+  .wrap { max-width: 720px; margin: 0 auto; padding: 48px 24px 96px; }
+  h1 { font-size: 32px; font-weight: 700; margin: 0 0 12px; letter-spacing: -0.01em; }
+  .lede { font-size: 16px; color: var(--ink-soft); margin: 0 0 44px; max-width: 56ch; }
+
+  .post-list { display: flex; flex-direction: column; gap: 4px; }
+  .post-card {
+    display: block; text-decoration: none; color: inherit; padding: 22px 24px;
+    background: var(--surface); border: 1px solid var(--rule-soft); border-radius: 14px; margin-bottom: 14px;
+    transition: border-color .15s ease;
+  }
+  .post-card:hover { border-color: var(--brand); }
+  .post-eyebrow { font-size: 11.5px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; color: var(--brand); margin-bottom: 8px; }
+  .post-card h2 { font-size: 19px; margin: 0 0 8px; letter-spacing: -0.01em; }
+  .post-card p { font-size: 14px; color: var(--ink-soft); margin: 0 0 10px; }
+  .post-meta { font-size: 12.5px; color: var(--ink-faint); }
+
+  footer.page-foot { margin-top: 40px; padding-top: 22px; border-top: 1px solid var(--rule-soft); color: var(--ink-faint); font-size: 13px; }
+  footer.page-foot a { color: var(--ink-faint); }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <svg viewBox="50 50 500 470" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+    <path d="M445 92C386 34 302 0 208 0C93 0 0 93 0 208s93 208 208 208c94 0 178-34 237-92l-65-65c-43 40-102 63-172 63-63 0-114-51-114-114S145 94 208 94c70 0 129 23 172 63z" fill="var(--brand)" transform="translate(75 75)"/>
+    <path d="M16 264c31 91 106 152 192 152 71 0 135-27 184-73l-66-65c-31 28-72 44-118 44-44 0-82-24-100-58-17-31-14-56-14-56-21 14-51 37-78 56z" fill="var(--brand-bright)" transform="translate(75 75)"/>
+  </svg>
+  <span class="name">Comptoir</span>
+  <a class="back" href="/">← Retour à l'accueil</a>
+</div>
+
+<div class="wrap">
+  <h1>Blog</h1>
+  <p class="lede">Conseils pratiques pour vendre en ligne — marge, stock multicanal, comptabilité simplifiée. Écrit par l'équipe de Comptoir.</p>
+
+  <div class="post-list">
+    <a class="post-card" href="/blog/calculer-sa-vraie-marge-ecommerce.html">
+      <div class="post-eyebrow">Comptabilité</div>
+      <h2>Calculer sa vraie marge en e-commerce (pas juste son chiffre d'affaires)</h2>
+      <p>Le chiffre d'affaires ne dit rien sur la santé d'une boutique. Comment calculer sa marge brute et son bénéfice net, avec un exemple chiffré.</p>
+      <div class="post-meta">15 septembre 2026 · 6 min de lecture</div>
+    </a>
+  </div>
+
+  <footer class="page-foot">Comptoir — Vendez partout. Comptez ici.</footer>
+</div>
+
+</body>
+</html>

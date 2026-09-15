@@ -904,6 +904,7 @@ function renderLanding() {
         <div class="wrap l-foot-row">
           <div class="l-foot-brand">${AUTH_MARK}Comptoir</div>
           <div class="l-foot-links">
+            <a href="/blog/">Blog</a>
             <a href="mailto:contact@getcomptoir.fr">contact@getcomptoir.fr</a>
             <a href="/politique-confidentialite.html">Politique de confidentialité</a>
             <a href="/conditions-generales.html">CGU</a>

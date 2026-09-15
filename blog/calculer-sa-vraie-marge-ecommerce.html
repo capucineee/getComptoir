@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Calculer sa vraie marge en e-commerce (pas juste son chiffre d'affaires) — Comptoir</title>
+<meta name="description" content="Le chiffre d'affaires ne dit rien de la santé d'une boutique en ligne. Comment calculer sa marge brute, son bénéfice net, et éviter les erreurs qui faussent tout — avec un exemple chiffré.">
+<link rel="canonical" href="https://getcomptoir.fr/blog/calculer-sa-vraie-marge-ecommerce.html">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="Comptoir">
+<meta property="og:title" content="Calculer sa vraie marge en e-commerce (pas juste son chiffre d'affaires)">
+<meta property="og:description" content="Le chiffre d'affaires ne dit rien de la santé d'une boutique en ligne. Comment calculer sa marge brute, son bénéfice net, et éviter les erreurs qui faussent tout.">
+<meta property="og:url" content="https://getcomptoir.fr/blog/calculer-sa-vraie-marge-ecommerce.html">
+<meta property="og:locale" content="fr_FR">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="Calculer sa vraie marge en e-commerce">
+<meta name="twitter:description" content="Le chiffre d'affaires ne dit rien de la santé d'une boutique en ligne. Comment calculer sa marge brute et son bénéfice net, avec un exemple chiffré.">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "Article",
+  "headline": "Calculer sa vraie marge en e-commerce (pas juste son chiffre d'affaires)",
+  "description": "Comment calculer sa marge brute et son bénéfice net en e-commerce, avec un exemple chiffré et les erreurs les plus courantes.",
+  "author": { "@type": "Organization", "name": "Comptoir" },
+  "publisher": { "@type": "Organization", "name": "Comptoir" },
+  "datePublished": "2026-09-15",
+  "dateModified": "2026-09-15",
+  "mainEntityOfPage": "https://getcomptoir.fr/blog/calculer-sa-vraie-marge-ecommerce.html"
+}
+</script>
+<link rel="icon" href="/icons/icon-192.png">
+<link rel="stylesheet" href="/styles.css">
+<style>
+  body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--font); line-height: 1.7; }
+  .topbar {
+    position: sticky; top: 0; z-index: 10; display: flex; align-items: center; gap: 10px;
+    padding: 14px 24px; background: var(--surface); border-bottom: 1px solid var(--rule-soft);
+  }
+  .topbar svg { width: 24px; height: 24px; flex-shrink: 0; }
+  .topbar .name { font-weight: 700; font-size: 15px; }
+  .topbar .back { margin-left: auto; color: var(--ink-soft); font-size: 13px; text-decoration: none; }
+  .topbar .back:hover { color: var(--brand); }
+
+  article.wrap { max-width: 680px; margin: 0 auto; padding: 48px 24px 96px; }
+  .eyebrow {
+    display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 600;
+    letter-spacing: 0.04em; text-transform: uppercase; color: var(--brand); background: var(--brand-soft);
+    padding: 5px 11px; border-radius: 100px; margin-bottom: 18px;
+  }
+  h1 { font-size: 32px; font-weight: 700; margin: 0 0 14px; letter-spacing: -0.01em; line-height: 1.2; }
+  .byline { color: var(--ink-faint); font-size: 13px; margin: 0 0 40px; }
+  .lede { font-size: 17px; color: var(--ink-soft); margin: 0 0 8px; }
+
+  h2 { font-size: 22px; margin: 44px 0 14px; letter-spacing: -0.01em; }
+  h3 { font-size: 17px; margin: 28px 0 10px; }
+  p { font-size: 15.5px; color: var(--ink); margin: 0 0 16px; }
+  p.soft { color: var(--ink-soft); }
+  ul, ol { font-size: 15.5px; margin: 0 0 16px; padding-left: 22px; }
+  li { margin-bottom: 8px; }
+  strong { font-weight: 650; }
+  code { background: var(--surface-sunken); padding: 1px 6px; border-radius: 5px; font-size: 13.5px; font-family: var(--font-mono); }
+
+  .formula {
+    background: var(--surface-sunken); border: 1px solid var(--rule-soft); border-radius: 12px;
+    padding: 18px 20px; margin: 18px 0 24px; font-family: var(--font-mono); font-size: 14.5px;
+    line-height: 1.8; overflow-x: auto;
+  }
+  .formula .res { color: var(--brand); font-weight: 600; }
+
+  .example {
+    background: var(--surface); border: 1px solid var(--rule-soft); border-radius: 14px;
+    padding: 22px 24px; margin: 22px 0;
+  }
+  .example h3 { margin-top: 0; }
+  table { width: 100%; border-collapse: collapse; font-size: 14.5px; margin: 4px 0; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--rule-soft); }
+  td:last-child, th:last-child { text-align: right; font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+  tr.total td { font-weight: 650; border-top: 2px solid var(--rule-soft); border-bottom: none; }
+  tr.total td:last-child { color: var(--brand); }
+
+  .callout {
+    display: flex; gap: 12px; background: var(--warning-soft); border: 1px solid transparent; color: var(--warning);
+    border-radius: 12px; padding: 16px 18px; margin: 24px 0; font-size: 14.5px; line-height: 1.6;
+  }
+  .callout svg { flex-shrink: 0; width: 18px; height: 18px; margin-top: 2px; }
+  .callout code { color: inherit; }
+
+  .cta-card {
+    background: var(--brand-soft); border: 1px solid transparent; border-radius: 16px;
+    padding: 26px 28px; margin-top: 48px; display: flex; align-items: center; gap: 20px; flex-wrap: wrap;
+  }
+  .cta-card .txt { flex: 1; min-width: 220px; }
+  .cta-card h3 { margin: 0 0 6px; font-size: 17px; }
+  .cta-card p { margin: 0; color: var(--ink-soft); font-size: 14px; }
+  .cta-card .btn {
+    background: var(--brand); color: #fff; border: none; padding: 11px 20px; border-radius: 9px;
+    font-weight: 600; font-size: 14px; text-decoration: none; white-space: nowrap;
+  }
+
+  footer.page-foot { margin-top: 56px; padding-top: 22px; border-top: 1px solid var(--rule-soft); color: var(--ink-faint); font-size: 13px; }
+  footer.page-foot a { color: var(--ink-faint); }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <svg viewBox="50 50 500 470" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+    <path d="M445 92C386 34 302 0 208 0C93 0 0 93 0 208s93 208 208 208c94 0 178-34 237-92l-65-65c-43 40-102 63-172 63-63 0-114-51-114-114S145 94 208 94c70 0 129 23 172 63z" fill="var(--brand)" transform="translate(75 75)"/>
+    <path d="M16 264c31 91 106 152 192 152 71 0 135-27 184-73l-66-65c-31 28-72 44-118 44-44 0-82-24-100-58-17-31-14-56-14-56-21 14-51 37-78 56z" fill="var(--brand-bright)" transform="translate(75 75)"/>
+  </svg>
+  <span class="name">Comptoir</span>
+  <a class="back" href="/blog/">← Retour au blog</a>
+</div>
+
+<article class="wrap">
+  <span class="eyebrow">Comptabilité</span>
+  <h1>Calculer sa vraie marge en e-commerce (pas juste son chiffre d'affaires)</h1>
+  <p class="byline">Comptoir · 15 septembre 2026 · 6 min de lecture</p>
+
+  <p class="lede">« J'ai fait 8 000 € ce mois-ci. » Ce chiffre ne dit strictement rien sur la santé d'une boutique. Il peut cacher une marge confortable — ou une activité qui perd de l'argent à chaque commande. Voici comment calculer ce qui compte vraiment.</p>
+
+  <h2>Trois chiffres, pas un seul</h2>
+  <p>La confusion vient de là : on parle souvent d'un seul chiffre (le chiffre d'affaires) alors qu'il en faut trois pour savoir où on en est réellement.</p>
+  <ul>
+    <li><strong>Le chiffre d'affaires</strong> — tout ce qui est encaissé. Ne dit rien sur ce que ça a coûté.</li>
+    <li><strong>La marge brute</strong> — ce qu'il reste une fois le coût d'achat des produits déduit.</li>
+    <li><strong>Le bénéfice net</strong> — ce qu'il reste une fois <em>toutes</em> les charges déduites de la marge.</li>
+  </ul>
+  <p>Une boutique peut avoir un chiffre d'affaires en hausse et un bénéfice net en baisse. C'est même l'un des pièges les plus fréquents en début d'activité : vendre plus, sans jamais vérifier si vendre plus rapporte plus.</p>
+
+  <h2>La marge brute</h2>
+  <p>C'est la première chose à calculer, et la plus simple :</p>
+  <div class="formula">Marge brute = Chiffre d'affaires HT − Coût d'achat des produits vendus<br>
+  <span class="res">Marge brute (%) = Marge brute / Chiffre d'affaires HT × 100</span></div>
+  <p>Le coût d'achat, c'est ce que le produit vous a coûté à vous — matière première, fabrication, ou prix d'achat fournisseur si vous revendez. Pas le prix de vente. C'est l'erreur n°1 : beaucoup de boutiques ne connaissent pas ce chiffre produit par produit, et calculent une marge globale approximative qui masque des écarts énormes d'un article à l'autre.</p>
+
+  <h3>Pourquoi le pourcentage compte plus que le montant</h3>
+  <p>150 € de marge sur une vente de 200 € (75 %) et 150 € de marge sur une vente de 1 500 € (10 %) racontent deux histoires opposées. Le montant en euros ne suffit jamais à juger si un produit est rentable — c'est toujours le pourcentage qui le dit.</p>
+
+  <h2>Le bénéfice net</h2>
+  <p>La marge brute ignore encore tout ce qui fait tourner la boutique : hébergement de la boutique, commissions de plateforme, publicité, emballages, frais de livraison non refacturés, abonnements logiciels... Le bénéfice net les intègre :</p>
+  <div class="formula">Bénéfice net = Marge brute − Charges de la période</div>
+  <p>C'est ce chiffre-là, pas le chiffre d'affaires, qui dit si l'activité est viable.</p>
+
+  <div class="example">
+    <h3>Exemple chiffré</h3>
+    <p class="soft" style="margin-bottom:14px;">Un mois type pour une petite boutique multicanal :</p>
+    <table>
+      <tr><td>Chiffre d'affaires (30 commandes)</td><td>1 850,00 €</td></tr>
+      <tr><td>− Coût d'achat des produits vendus</td><td>−690,00 €</td></tr>
+      <tr class="total"><td>= Marge brute (62,7 %)</td><td>1 160,00 €</td></tr>
+      <tr><td>− Abonnement boutique</td><td>−29,00 €</td></tr>
+      <tr><td>− Publicité Instagram</td><td>−85,00 €</td></tr>
+      <tr><td>− Emballages</td><td>−42,00 €</td></tr>
+      <tr><td>− Commissions de plateforme</td><td>−96,00 €</td></tr>
+      <tr class="total"><td>= Bénéfice net</td><td>908,00 €</td></tr>
+    </table>
+    <p class="soft" style="margin:14px 0 0;">Un chiffre d'affaires de 1 850 € qui, une fois tout compté, laisse 908 € — pas 1 850 €. Sans ce calcul, il est facile de croire que le mois a été deux fois meilleur qu'il ne l'a réellement été.</p>
+  </div>
+
+  <h2>Les erreurs qui faussent le calcul</h2>
+  <ul>
+    <li><strong>Oublier les commissions de plateforme.</strong> Etsy, Shopify Payments, Instagram Shop... chacune prélève un pourcentage. Sur un petit panier, ça se sent directement sur la marge.</li>
+    <li><strong>Ne pas déduire les retours.</strong> Un produit remboursé n'a généré ni chiffre d'affaires ni marge — mais il a souvent coûté des frais d'envoi dans les deux sens.</li>
+    <li><strong>Compter le prix de vente au lieu du prix d'achat.</strong> Semble évident écrit comme ça, mais c'est l'erreur la plus commune quand le calcul se fait de tête plutôt que produit par produit.</li>
+    <li><strong>Regarder ça une fois par an.</strong> Une marge qui s'érode se voit mois après mois, pas en fin d'année quand il est trop tard pour ajuster les prix ou changer de fournisseur.</li>
+  </ul>
+
+  <div class="callout">
+    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="10" cy="10" r="8.2"/><path d="M10 6.5v4M10 13.2v.1"/></svg>
+    <div>Un signal simple à surveiller : si le coût d'achat d'un produit n'est pas renseigné quelque part, sa marge réelle est probablement inconnue aussi — même si les ventes ont l'air de bien se passer.</div>
+  </div>
+
+  <h2>Ce qu'il faut retenir</h2>
+  <p>Le chiffre d'affaires mesure l'activité. La marge et le bénéfice net mesurent si cette activité rapporte réellement. Les trois se suivent, mais un seul dit si la boutique gagne de l'argent — et ce n'est jamais le premier.</p>
+
+  <div class="cta-card">
+    <div class="txt">
+      <h3>Comptoir calcule ça automatiquement</h3>
+      <p>Marge brute et bénéfice net recalculés en temps réel à partir de vos vraies ventes, tous canaux confondus — pas de tableur à tenir à jour.</p>
+    </div>
+    <a class="btn" href="/">Découvrir Comptoir</a>
+  </div>
+
+  <footer class="page-foot">
+    <a href="/blog/">← Tous les articles</a> · <a href="/">Comptoir — Vendez partout. Comptez ici.</a>
+  </footer>
+</article>
+
+</body>
+</html>
