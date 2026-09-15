@@ -1091,6 +1091,7 @@ async function boot() {
     // edited locally to claim any plan. Overwritten fresh on every boot, before anything
     // gets persisted back.
     state.plan = { tier: me.plan.tier, status: me.plan.status, renewsAt: me.plan.renewsAt, freeForever: me.plan.freeForever };
+    state.emailVerified = me.emailVerified;
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
   } catch (err) {
     console.error('Impossible de charger les données depuis le serveur, utilisation du cache local.', err);
@@ -2409,13 +2410,20 @@ function renderNav() {
   document.getElementById('planChipLabel').textContent = state.plan.tier ? PLAN_META[state.plan.tier].name : '—';
 }
 
+function verifyEmailBannerHTML() {
+  return `<div class="verify-banner">
+    <span class="txt">Confirmez votre adresse email pour choisir un forfait et connecter vos canaux de vente — vérifiez votre boîte de réception (et vos spams).</span>
+    <button type="button" data-action="resendVerifyEmail">Renvoyer l'email</button>
+  </div>`;
+}
+
 function render() {
   paintTheme();
   renderNav();
   const main = document.getElementById('main');
   const path = currentPath();
   const pages = { '': pageOverview, 'ventes': pageVentes, 'stock': pageStock, 'catalogue': pageCatalogue, 'sav': pageSAV, 'connecteurs': pageConnecteurs, 'facturation': pageFacturation, 'comptabilite': pageComptabilite, 'parametres': pageParametres };
-  main.innerHTML = (pages[path] || pageOverview)();
+  main.innerHTML = (state.emailVerified === false ? verifyEmailBannerHTML() : '') + (pages[path] || pageOverview)();
   if (path === '') {
     const bounds = getRangeBounds();
     const granularity = state.overviewGranularity;
@@ -3054,6 +3062,23 @@ document.addEventListener('click', e => {
 
   if (action === 'openCheckout') return openCheckoutModal(el.dataset.tier);
   if (action === 'openBillingPortal') return openBillingPortal();
+  if (action === 'resendVerifyEmail') {
+    const session = getSession();
+    el.disabled = true;
+    el.textContent = 'Envoi…';
+    apiRequest('/api/email-verify/resend', { method: 'POST', token: session.token })
+      .then(data => {
+        toast(data.alreadyVerified ? 'Cette adresse est déjà confirmée.' : 'Email renvoyé — vérifiez votre boîte de réception.');
+        el.disabled = false;
+        el.textContent = 'Renvoyer l\'email';
+      })
+      .catch(err => {
+        toast(err.message, true);
+        el.disabled = false;
+        el.textContent = 'Renvoyer l\'email';
+      });
+    return;
+  }
 
   if (action === 'toggleTicket') {
     const t = state.savTickets.find(t => t.id === el.dataset.id);
@@ -3148,9 +3173,20 @@ paintTheme();
 // normal splash/boot flow so it works whether or not the visitor is currently logged in,
 // then scrub it from the visible URL so refreshing or using back doesn't resubmit it.
 const resetTokenParam = new URLSearchParams(location.search).get('resetToken');
+const verifyTokenParam = new URLSearchParams(location.search).get('verifyToken');
 if (resetTokenParam) {
   history.replaceState(null, '', location.pathname + location.hash);
   renderPasswordResetConfirm(resetTokenParam);
+} else if (verifyTokenParam) {
+  // The confirmation link proves email ownership only — it never returns a session, so
+  // this doesn't log anyone in on its own. Whoever clicks it either already has a session
+  // on this device (falls straight through to their dashboard) or lands on the normal
+  // login screen right after, same as any other first visit.
+  history.replaceState(null, '', location.pathname + location.hash);
+  apiRequest('/api/email-verify/confirm', { method: 'POST', body: { token: verifyTokenParam } })
+    .then(() => toast('Adresse email confirmée !'))
+    .catch(err => toast(err.message, true))
+    .finally(() => renderSplash(boot));
 } else {
   renderSplash(boot);
 }

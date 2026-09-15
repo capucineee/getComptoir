@@ -348,6 +348,12 @@ def init_db():
             shop_domain TEXT NOT NULL,
             created_at TEXT NOT NULL DEFAULT (datetime('now'))
         );
+        CREATE TABLE IF NOT EXISTS email_verifications (
+            token TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            used_at TEXT
+        );
     """)
     # Migration: existing deployments already have a `users` table from before consent
     # tracking existed — CREATE TABLE IF NOT EXISTS above leaves it untouched, so the new
@@ -358,6 +364,14 @@ def init_db():
         conn.execute("ALTER TABLE users ADD COLUMN consent_version TEXT")
     if "consent_accepted_at" not in existing_cols:
         conn.execute("ALTER TABLE users ADD COLUMN consent_accepted_at TEXT")
+    # email_verified_at is retroactively backfilled to "already verified" for every account
+    # that existed before this column did — they've been using the app for a while, it
+    # would be actively harmful to suddenly block their billing/connectors over an email
+    # confirmation step that didn't exist when they signed up. Only accounts created from
+    # here on start out NULL (unverified) and go through the real flow.
+    if "email_verified_at" not in existing_cols:
+        conn.execute("ALTER TABLE users ADD COLUMN email_verified_at TEXT")
+        conn.execute("UPDATE users SET email_verified_at = created_at")
     # api_keys originally only ever meant the custom connector — channel_type generalizes
     # it to any real integration that authenticates with a plain shared secret rather than
     # Shopify-style OAuth (WooCommerce today). Existing rows default to 'custom', which is
@@ -443,7 +457,7 @@ def user_from_token(token: str):
     conn = get_db()
     row = conn.execute(
         """SELECT u.id, u.email, u.consent_version, u.consent_accepted_at,
-                  u.plan_tier, u.plan_status, u.plan_renews_at, u.stripe_customer_id
+                  u.plan_tier, u.plan_status, u.plan_renews_at, u.stripe_customer_id, u.email_verified_at
            FROM sessions s
            JOIN users u ON u.id = s.user_id
            WHERE s.token = ? AND s.created_at >= datetime('now', ?)""",
@@ -479,39 +493,41 @@ def handle_signup(body):
         "INSERT INTO users (id, email, password_hash, password_salt, consent_version, consent_accepted_at) VALUES (?, ?, ?, ?, ?, datetime('now'))",
         (user_id, email, pw_hash, pw_salt, CONSENT_VERSION),
     )
+    verify_token = secrets.token_hex(32)
+    conn.execute("INSERT INTO email_verifications (token, user_id) VALUES (?, ?)", (verify_token, user_id))
     conn.commit()
     conn.close()
     token = create_session(user_id)
-    send_welcome_email(email)
+    send_welcome_email(email, f"{PUBLIC_BASE_URL}/?verifyToken={verify_token}")
     return {"token": token, "email": email}
 
 
-def send_welcome_email(email: str):
+def send_welcome_email(email: str, verify_link: str):
     text_body = (
         f"Bienvenue sur Comptoir !\n\n"
-        f"Votre compte ({email}) est créé. Trois choses à faire pour démarrer :\n\n"
+        f"Confirmez d'abord votre adresse email — indispensable pour recevoir vos factures "
+        f"et réinitialiser votre mot de passe si besoin, et nécessaire avant de choisir un "
+        f"forfait ou de connecter un canal de vente :\n{verify_link}\n\n"
+        f"Ensuite, trois choses à faire pour démarrer :\n\n"
         f"1. Choisissez un forfait — Facturation, dans le menu de gauche.\n"
         f"2. Connectez votre premier canal de vente — Connecteurs.\n"
         f"3. Ajoutez vos produits — Mon catalogue.\n\n"
-        f"Ouvrez l'app : {PUBLIC_BASE_URL}/\n\n"
         f"Une question ? Répondez simplement à cet email.\n\n"
         f"— Comptoir"
     )
     html_body = branded_email_html(
         heading="Bienvenue sur Comptoir",
         body_html=(
-            f"<p style=\"margin:0 0 14px;\">Votre compte (<strong style=\"color:#1B211D;\">{html.escape(email)}</strong>) est créé. Trois choses à faire pour démarrer :</p>"
-            f"<ol style=\"margin:0; padding-left:20px;\">"
-            f"<li style=\"margin-bottom:6px;\">Choisissez un forfait — <b>Facturation</b>, dans le menu de gauche.</li>"
-            f"<li style=\"margin-bottom:6px;\">Connectez votre premier canal de vente — <b>Connecteurs</b>.</li>"
-            f"<li>Ajoutez vos produits — <b>Mon catalogue</b>.</li>"
-            f"</ol>"
+            f"<p style=\"margin:0 0 14px;\">Votre compte (<strong style=\"color:#1B211D;\">{html.escape(email)}</strong>) est créé. Confirmez d'abord votre adresse email — nécessaire avant de choisir un forfait ou de connecter un canal de vente.</p>"
         ),
-        cta_label="Ouvrir Comptoir",
-        cta_link=f"{PUBLIC_BASE_URL}/",
-        footnote="Une question ? Répondez simplement à cet email.",
+        cta_label="Confirmer mon adresse email",
+        cta_link=verify_link,
+        footnote=(
+            "Une fois confirmé : Facturation pour choisir un forfait, Connecteurs pour brancher votre première "
+            "plateforme, Mon catalogue pour ajouter vos produits. Une question ? Répondez simplement à cet email."
+        ),
     )
-    send_email(email, "Bienvenue sur Comptoir", text_body, html_body)
+    send_email(email, "Bienvenue sur Comptoir — confirmez votre email", text_body, html_body)
 
 
 # Login has no other brute-force protection (no account lockout, no CAPTCHA), so a bare
@@ -670,6 +686,81 @@ def handle_password_reset_confirm(body):
     return {"token": new_token, "email": user["email"]}
 
 
+EMAIL_VERIFY_TTL_DAYS = 7
+# Same shape as the password-reset limiter, keyed by user id instead of email since this
+# path is authenticated (you can only resend your own account's verification).
+RESEND_VERIFY_ATTEMPTS = {}
+RESEND_VERIFY_LOCK = threading.Lock()
+MAX_RESEND_VERIFY_ATTEMPTS = 5
+RESEND_VERIFY_WINDOW_SECONDS = 3600
+
+
+def check_resend_verify_rate_limit(user_id):
+    now = time.time()
+    with RESEND_VERIFY_LOCK:
+        attempts = [t for t in RESEND_VERIFY_ATTEMPTS.get(user_id, []) if now - t < RESEND_VERIFY_WINDOW_SECONDS]
+        RESEND_VERIFY_ATTEMPTS[user_id] = attempts
+        if len(attempts) >= MAX_RESEND_VERIFY_ATTEMPTS:
+            return False
+        attempts.append(now)
+        return True
+
+
+def send_verification_email(email: str, verify_link: str):
+    text_body = (
+        f"Confirmez votre adresse email pour continuer sur Comptoir :\n{verify_link}\n\n"
+        f"Ce lien est valable {EMAIL_VERIFY_TTL_DAYS} jours.\n\n— Comptoir"
+    )
+    html_body = branded_email_html(
+        heading="Confirmez votre adresse email",
+        body_html="<p style=\"margin:0;\">Cliquez sur le bouton ci-dessous pour confirmer votre adresse et débloquer le choix d'un forfait et la connexion de vos canaux de vente.</p>",
+        cta_label="Confirmer mon adresse email",
+        cta_link=verify_link,
+        footnote=f"Ce lien est valable {EMAIL_VERIFY_TTL_DAYS} jours.",
+    )
+    send_email(email, "Confirmez votre adresse email — Comptoir", text_body, html_body)
+
+
+def handle_email_verify_confirm(body):
+    verify_token = str(body.get("token", "")).strip()
+    if not verify_token:
+        raise ApiError(400, "Lien de confirmation invalide.")
+    conn = get_db()
+    row = conn.execute(
+        """SELECT user_id FROM email_verifications
+           WHERE token = ? AND used_at IS NULL AND created_at >= datetime('now', ?)""",
+        (verify_token, f"-{EMAIL_VERIFY_TTL_DAYS} days"),
+    ).fetchone()
+    if not row:
+        conn.close()
+        raise ApiError(400, "Ce lien de confirmation est invalide ou a expiré — demandez-en un nouveau depuis l'application.")
+    conn.execute(
+        "UPDATE users SET email_verified_at = datetime('now') WHERE id = ? AND email_verified_at IS NULL",
+        (row["user_id"],),
+    )
+    conn.execute("UPDATE email_verifications SET used_at = datetime('now') WHERE token = ?", (verify_token,))
+    conn.commit()
+    conn.close()
+    return {"ok": True}
+
+
+def handle_email_verify_resend(token):
+    user = user_from_token(token)
+    if not user:
+        raise ApiError(401, "Session invalide ou expirée.")
+    if user["email_verified_at"] is not None:
+        return {"ok": True, "alreadyVerified": True}
+    if not check_resend_verify_rate_limit(user["id"]):
+        raise ApiError(429, "Trop de demandes — réessayez dans quelques minutes.")
+    verify_token = secrets.token_hex(32)
+    conn = get_db()
+    conn.execute("INSERT INTO email_verifications (token, user_id) VALUES (?, ?)", (verify_token, user["id"]))
+    conn.commit()
+    conn.close()
+    send_verification_email(user["email"], f"{PUBLIC_BASE_URL}/?verifyToken={verify_token}")
+    return {"ok": True}
+
+
 def handle_logout(token):
     if token:
         conn = get_db()
@@ -684,6 +775,7 @@ def handle_me(token):
     if not user:
         raise ApiError(401, "Session invalide ou expirée.")
     user["plan"] = resolve_plan(user)
+    user["emailVerified"] = user["email_verified_at"] is not None
     return user
 
 
@@ -750,6 +842,17 @@ def require_active_plan(user):
     return plan
 
 
+def require_verified_email(user):
+    """Raises 403 for an account whose email was never confirmed — gates the actions where
+    an unreachable address is a real problem (getting billed, or a channel silently
+    dropping orders no one will ever be told about): choosing a plan, connecting a channel.
+    Every account that existed before this check shipped was backfilled to 'verified' at
+    migration time (see init_db) — this only ever blocks a genuinely new, unconfirmed
+    signup."""
+    if user["email_verified_at"] is None:
+        raise ApiError(403, "Confirmez votre adresse email avant de continuer — vérifiez votre boîte de réception (et vos spams).")
+
+
 def count_connected_channels(conn, user_id: str) -> int:
     return conn.execute("SELECT COUNT(*) FROM connected_channels WHERE user_id = ?", (user_id,)).fetchone()[0]
 
@@ -762,6 +865,7 @@ def handle_connect_channel(token, body):
     user = user_from_token(token)
     if not user:
         raise ApiError(401, "Session invalide ou expirée.")
+    require_verified_email(user)
     plan = require_active_plan(user)
     channel_type = str(body.get("type", "")).strip().lower()
     if not channel_type:
@@ -803,6 +907,7 @@ def handle_create_connector(token, body, channel_type: str = "custom"):
     user = user_from_token(token)
     if not user:
         raise ApiError(401, "Session invalide ou expirée.")
+    require_verified_email(user)
     plan = require_active_plan(user)
     label = str(body.get("label", "")).strip()
     if not label:
@@ -1220,6 +1325,7 @@ def handle_billing_checkout(token, body):
     user = user_from_token(token)
     if not user:
         raise ApiError(401, "Session invalide ou expirée.")
+    require_verified_email(user)
     if user["email"] in FREE_FOREVER_EMAILS:
         raise ApiError(400, "Ce compte est en accès gratuit permanent — aucun paiement n'est nécessaire.")
     tier = body.get("tier")
@@ -1342,6 +1448,7 @@ def handle_shopify_install(token, body):
     user = user_from_token(token)
     if not user:
         raise ApiError(401, "Session invalide ou expirée.")
+    require_verified_email(user)
     plan = require_active_plan(user)
     shop = str(body.get("shop", "")).strip().lower()
     if not SHOPIFY_SHOP_RE.match(shop):
@@ -1648,6 +1755,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 return self._send_json(200, handle_password_reset_request(body))
             if path == "/api/password-reset/confirm":
                 return self._send_json(200, handle_password_reset_confirm(body))
+            if path == "/api/email-verify/confirm":
+                return self._send_json(200, handle_email_verify_confirm(body))
+            if path == "/api/email-verify/resend":
+                return self._send_json(200, handle_email_verify_resend(self._bearer_token()))
             if path == "/api/logout":
                 return self._send_json(200, handle_logout(self._bearer_token()))
             if path == "/api/connectors/custom":
