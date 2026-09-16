@@ -29,37 +29,15 @@ function connectorGuideButton(type) {
   return `<button class="btn icon" data-action="${g.action}" title="${g.title}" aria-label="${g.title}" style="margin-left:auto; flex-shrink:0;">i</button>`;
 }
 
+// Only the manual (freely defined, not tied to any platform's data) fields stay static —
+// per-connector fields are discovered from real order data instead (see
+// discoverFieldCatalog below), not guessed here.
 const FIELD_CATALOG = {
   manual: [
     { key: 'note_interne', label: 'Note interne' },
     { key: 'priorite', label: 'Priorité' },
     { key: 'emballe_par', label: 'Emballé par' },
     { key: 'etiquette', label: 'Étiquette / mention' }
-  ],
-  shopify: [
-    { key: 'tracking_number', label: 'Numéro de suivi' },
-    { key: 'shopify_tags', label: 'Tags Shopify' },
-    { key: 'fulfillment_status', label: "Statut d'exécution" }
-  ],
-  etsy: [
-    { key: 'etsy_message', label: 'Message acheteur' },
-    { key: 'etsy_gift', label: 'Commande cadeau' }
-  ],
-  instagram: [
-    { key: 'insta_handle', label: 'Identifiant Instagram' },
-    { key: 'insta_post', label: 'Publication d\'origine' }
-  ],
-  woocommerce: [
-    { key: 'woo_notes', label: 'Notes de commande' },
-    { key: 'woo_coupon', label: 'Code promo utilisé' }
-  ],
-  tiktok: [
-    { key: 'tiktok_video_ref', label: 'Vidéo associée' },
-    { key: 'tiktok_creator', label: 'Créateur partenaire' }
-  ],
-  custom: [
-    { key: 'ext_ref', label: 'Référence externe' },
-    { key: 'ext_status', label: 'Statut plateforme' }
   ]
 };
 
@@ -1762,7 +1740,7 @@ function ventesOrderRow(o) {
     <td>${fmtDate(o.date)}</td>
     <td class="amount">${fmtEUR(o.amount)}</td>
     <td><span class="status-chip ${cls}"><span class="dot"></span>${label}</span></td>
-    ${state.customFields.map(f => `<td>${o.custom[f.id] ? escapeHTML(o.custom[f.id]) : '<span style="color:var(--ink-faint)">—</span>'}</td>`).join('')}
+    ${state.customFields.map(f => { const v = f.source !== 'manual' ? o.custom[f.key] : o.custom[f.id]; return `<td>${v ? escapeHTML(v) : '<span style="color:var(--ink-faint)">—</span>'}</td>`; }).join('')}
     <td></td>
   </tr>`;
 }
@@ -2585,7 +2563,31 @@ function openFieldPickerModal(catalog, existingFields, submitAction) {
     <div class="actions"><button class="btn" data-action="closeModal">Annuler</button><button class="btn primary" data-action="${submitAction}">Ajouter</button></div>
   `);
 }
-function openAddFieldModal() { openFieldPickerModal(FIELD_CATALOG, state.customFields, 'submitAddField'); }
+function prettifyFieldKey(key) {
+  return key.replace(/[_-]+/g, ' ').trim().replace(/\b\w/g, c => c.toUpperCase());
+}
+// Real connectors (Shopify, WooCommerce, connecteur personnalisé) capture every extra
+// field their raw payload sends, beyond what Comptoir already maps to amount/statut/
+// client/produit (see _extract_extra_fields in server.py) — so what's offered here is
+// whatever a merchant's own real orders actually contain, not a guessed list. Matched by
+// channelType rather than by specific connector id: Shopify's OAuth connector entry (a
+// client-generated id) doesn't line up with the shop domain orders are tagged with
+// server-side, so type is the reliable join key across all three real sources. Simulated
+// platforms (Etsy, Instagram, TikTok) never ingest real orders, so they never populate
+// order.custom and simply won't appear here — nothing to discover yet.
+function discoverFieldCatalog() {
+  const catalog = { manual: FIELD_CATALOG.manual };
+  connectedTypes().forEach(c => {
+    if (catalog[c.type]) return; // already built for this type (e.g. two custom connectors)
+    const seen = new Map();
+    state.orders.filter(o => o.channelType === c.type).forEach(o => {
+      Object.keys(o.custom || {}).forEach(k => { if (!seen.has(k)) seen.set(k, prettifyFieldKey(k)); });
+    });
+    if (seen.size) catalog[c.type] = Array.from(seen, ([key, label]) => ({ key, label }));
+  });
+  return catalog;
+}
+function openAddFieldModal() { openFieldPickerModal(discoverFieldCatalog(), state.customFields, 'submitAddField'); }
 function openAddSavFieldModal() { openFieldPickerModal(SAV_FIELD_CATALOG, state.savFields, 'submitAddSavField'); }
 function fieldSourceLabel(f) {
   if (f.source === 'manual') return 'Saisie manuelle';
@@ -2609,7 +2611,10 @@ function openOrderDetailModal(orderId) {
       <div style="font-size:12.5px; color:var(--ink-faint); margin-bottom:12px;">Champs de suivi</div>
       ${state.customFields.length ? state.customFields.map(f => {
         const synced = f.source !== 'manual';
-        const val = o.custom[f.id] ? escapeHTML(o.custom[f.id]) : '';
+        // A synced field's real value lives under its original platform key (o.custom.financial_status,
+        // say) — captured straight from the connector's raw data (server-side _extract_extra_fields).
+        // A manual field has no such key; its value lives under the tracked field's own id instead.
+        const val = escapeHTML((synced ? o.custom[f.key] : o.custom[f.id]) || '');
         return `
         <div class="custom-field-row">
           <label>${f.label}<span class="field-source-tag">${fieldSourceLabel(f)}</span></label>

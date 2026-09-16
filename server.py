@@ -984,6 +984,32 @@ STATUS_ALIASES = {
     "preparation": {"preparation", "pending", "processing", "en_attente", "created", "new", "confirmed", "awaiting", "open", "en_preparation"},
     "retour": {"retour", "refunded", "returned", "cancelled", "canceled", "annulee", "rembourse", "refund"},
 }
+# Every alias name across every recognized field, lowercased — never re-offer one of these
+# as a "discovered" extra field, it's already surfaced as amount/status/customer/etc.
+_CONSUMED_FIELD_KEYS = {alias.lower() for aliases in FIELD_ALIASES.values() for alias in aliases} | {
+    "customer", "billing", "shipping", "items", "products", "lineitems", "line_items",
+}
+MAX_EXTRA_FIELDS_PER_ORDER = 20
+
+
+def _extract_extra_fields(body: dict) -> dict:
+    """Real platforms (Shopify, WooCommerce, a custom site's own API) send far more fields
+    than the ones mapped above — this captures the rest as trackable custom fields, so
+    'Ajouter un champ de suivi' in the app can offer what a merchant's real connected data
+    actually contains instead of a guessed, invented list. Only flat scalars: a nested
+    object or array (line_items, billing...) has no single value to show in a table column,
+    and capturing it wholesale risks real storage bloat for no display benefit."""
+    extra = {}
+    for k, v in body.items():
+        if len(extra) >= MAX_EXTRA_FIELDS_PER_ORDER:
+            break
+        if str(k).strip().lower() in _CONSUMED_FIELD_KEYS:
+            continue
+        if isinstance(v, bool) or isinstance(v, (int, float)):
+            extra[str(k)] = str(v)
+        elif isinstance(v, str) and v.strip():
+            extra[str(k)] = v.strip()
+    return extra
 
 
 def _pick_field(source, aliases):
@@ -1291,7 +1317,7 @@ def _ingest_order_core(conn, user_id: str, channel_type: str, connector_id: str,
             "status": status,
             "quantity": quantity,
             "date": date,
-            "custom": {},
+            "custom": _extract_extra_fields(body) if isinstance(body, dict) else {},
             "externalId": external_id,
         }
         orders.insert(0, order)
