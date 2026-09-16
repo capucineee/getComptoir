@@ -12,6 +12,7 @@ Standard library only: no packages to install.
 from __future__ import annotations
 
 import base64
+import gzip
 import hashlib
 import hmac
 import html
@@ -22,6 +23,7 @@ import re
 import secrets
 import sqlite3
 import sys
+import tempfile
 import threading
 import time
 import traceback
@@ -1865,6 +1867,96 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         sys.stderr.write("%s - %s\n" % (self.address_string(), fmt % args))
 
 
+# Automatic database backups to Cloudflare R2 — the SQLite file lives on a single Railway
+# volume with no copy anywhere else; a disk incident there would silently erase every real
+# account's data with no way back. R2 is S3-compatible, so this is a real (if partial) AWS
+# Signature Version 4 implementation using only stdlib hashlib/hmac — no boto3 or any other
+# SDK, same constraint as every other integration in this file. It only signs and sends a
+# single PUT (no multipart, no bucket listing/deletion), which is all a one-file-per-backup
+# upload needs.
+R2_ACCOUNT_ID = os.environ.get("R2_ACCOUNT_ID")
+R2_ACCESS_KEY_ID = os.environ.get("R2_ACCESS_KEY_ID")
+R2_SECRET_ACCESS_KEY = os.environ.get("R2_SECRET_ACCESS_KEY")
+R2_BUCKET_NAME = os.environ.get("R2_BUCKET_NAME")
+BACKUP_INTERVAL_SECONDS = int(os.environ.get("BACKUP_INTERVAL_HOURS", "24")) * 3600
+
+
+def _sigv4_hmac(key: bytes, msg: str) -> bytes:
+    return hmac.new(key, msg.encode("utf-8"), hashlib.sha256).digest()
+
+
+def _r2_put_object(key: str, data: bytes, content_type: str) -> None:
+    host = f"{R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
+    region = "auto"
+    service = "s3"
+    now = datetime.now(timezone.utc)
+    amz_date = now.strftime("%Y%m%dT%H%M%SZ")
+    date_stamp = now.strftime("%Y%m%d")
+    payload_hash = hashlib.sha256(data).hexdigest()
+    canonical_uri = f"/{R2_BUCKET_NAME}/{key}"
+    canonical_headers = f"host:{host}\nx-amz-content-sha256:{payload_hash}\nx-amz-date:{amz_date}\n"
+    signed_headers = "host;x-amz-content-sha256;x-amz-date"
+    canonical_request = "\n".join(["PUT", canonical_uri, "", canonical_headers, signed_headers, payload_hash])
+    credential_scope = f"{date_stamp}/{region}/{service}/aws4_request"
+    string_to_sign = "\n".join([
+        "AWS4-HMAC-SHA256", amz_date, credential_scope,
+        hashlib.sha256(canonical_request.encode("utf-8")).hexdigest(),
+    ])
+    signing_key = _sigv4_hmac(_sigv4_hmac(_sigv4_hmac(_sigv4_hmac(
+        f"AWS4{R2_SECRET_ACCESS_KEY}".encode("utf-8"), date_stamp), region), service), "aws4_request")
+    signature = hmac.new(signing_key, string_to_sign.encode("utf-8"), hashlib.sha256).hexdigest()
+    authorization = (
+        f"AWS4-HMAC-SHA256 Credential={R2_ACCESS_KEY_ID}/{credential_scope}, "
+        f"SignedHeaders={signed_headers}, Signature={signature}"
+    )
+    req = urllib.request.Request(
+        f"https://{host}{canonical_uri}", data=data, method="PUT",
+        headers={
+            "Host": host, "x-amz-content-sha256": payload_hash, "x-amz-date": amz_date,
+            "Authorization": authorization, "Content-Type": content_type,
+        },
+    )
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        resp.read()
+
+
+def _run_backup_once():
+    if not (R2_ACCOUNT_ID and R2_ACCESS_KEY_ID and R2_SECRET_ACCESS_KEY and R2_BUCKET_NAME):
+        print("[sauvegarde ignorée — R2 non configuré]", file=sys.stderr)
+        return
+    tmp_path = None
+    try:
+        # sqlite3's own backup API, not a raw file copy — it produces a consistent snapshot
+        # even while the live database is being written to, which a plain file read of a
+        # SQLite file mid-write could not guarantee.
+        fd, tmp_path = tempfile.mkstemp(suffix=".db")
+        os.close(fd)
+        src = get_db()
+        dst = sqlite3.connect(tmp_path)
+        with dst:
+            src.backup(dst)
+        src.close()
+        dst.close()
+        with open(tmp_path, "rb") as f:
+            compressed = gzip.compress(f.read())
+        key = "backups/comptoir-" + datetime.now(timezone.utc).strftime("%Y-%m-%d-%H%M%S") + ".db.gz"
+        _r2_put_object(key, compressed, "application/gzip")
+        print(f"[sauvegarde OK] {key} ({len(compressed)} octets)", file=sys.stderr)
+    except Exception:
+        # A failed backup should never take the server down with it — log it loudly and
+        # try again at the next interval.
+        traceback.print_exc(file=sys.stderr)
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            os.remove(tmp_path)
+
+
+def _backup_loop():
+    while True:
+        _run_backup_once()
+        time.sleep(BACKUP_INTERVAL_SECONDS)
+
+
 def main():
     # Hosting platforms (Railway, Render, Fly.io...) assign a port via $PORT.
     # A CLI argument still wins locally, e.g. `python3 server.py 8082`.
@@ -1873,6 +1965,9 @@ def main():
     else:
         port = int(os.environ.get("PORT", 8082))
     init_db()
+    # Daemon: dies with the process, never blocks shutdown. Fires once immediately (so
+    # every deploy doubles as a fresh backup) then on BACKUP_INTERVAL_SECONDS after that.
+    threading.Thread(target=_backup_loop, daemon=True).start()
     server = http.server.ThreadingHTTPServer(("", port), Handler)
     print(f"Comptoir server running on port {port}  (db: {DB_PATH})")
     try:
