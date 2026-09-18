@@ -340,6 +340,7 @@ async function refreshStateFromServer({ silent = false } = {}) {
     state.orders = fresh.orders;
     state.products = fresh.products;
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    markSynced();
     render();
     if (!silent) toast('Données synchronisées.');
   } catch (err) {
@@ -1108,6 +1109,7 @@ async function boot() {
   const label = document.getElementById('userEmailLabel');
   if (label) label.textContent = me.email;
   paintTheme();
+  markSynced();
   render();
 
   // Returning from Stripe Checkout: ?checkout=success|cancel#facturation. Report it once,
@@ -1611,6 +1613,7 @@ function pageOverview() {
   const custom = state.rangeCustom || {};
 
   return `
+    <div class="overview-page">
     <div class="topbar">
       <div><h1>Vue d'ensemble</h1><div class="sub">Aperçu de votre activité multicanale</div></div>
       <div class="topbar-actions">
@@ -1627,15 +1630,16 @@ function pageOverview() {
         <div class="range">
           ${[['day', 'Jour'], ['week', 'Semaine'], ['month', 'Mois']].map(([g, label]) => `<button data-action="setGranularity" data-granularity="${g}" class="${granularity === g ? 'active' : ''}">${label}</button>`).join('')}
         </div>
+        <span class="sync-indicator" title="Les commandes et le stock se resynchronisent automatiquement en arrière-plan"><span class="sync-dot"></span><span id="syncIndicatorText">${syncLabel()}</span></span>
         ${themeToggleHTML()}
       </div>
     </div>
 
     <div class="kpis">
-      <div class="kpi"><div class="label">Chiffre d'affaires</div><div class="row"><span class="value">${fmtEUR(k.ca)}</span>${deltaHTML(k.caDelta)}</div>${sparkline(series.map(s => s.ca), 'var(--brand)')}</div>
-      <div class="kpi"><div class="label">Commandes</div><div class="row"><span class="value">${fmtNum(k.count)}</span>${deltaHTML(k.countDelta)}</div>${sparkline(series.map(s => s.count), 'var(--brand)')}</div>
-      <div class="kpi"><div class="label">Panier moyen</div><div class="row"><span class="value">${fmtEUR(k.panier)}</span>${deltaHTML(k.panierDelta)}</div>${sparkline(series.map(s => s.count ? s.ca / s.count : 0), 'var(--brand)')}</div>
-      <div class="kpi"><div class="label">Taux de retour</div><div class="row"><span class="value">${k.tauxRetour.toFixed(1)}%</span>${deltaHTML(-k.tauxRetourDelta, true)}</div>${sparkline(series.map(s => s.count ? (s.retours / s.count) * 100 : 0), k.tauxRetourDelta > 0 ? 'var(--critical)' : 'var(--brand)')}</div>
+      <div class="kpi" data-kpi="ca"><div class="label">Chiffre d'affaires</div><div class="row"><span class="value" data-target="${k.ca}" data-format="eur">${fmtEUR(k.ca)}</span>${deltaHTML(k.caDelta)}</div>${sparkline(series.map(s => s.ca), 'var(--brand)')}</div>
+      <div class="kpi" data-kpi="count"><div class="label">Commandes</div><div class="row"><span class="value" data-target="${k.count}" data-format="num">${fmtNum(k.count)}</span>${deltaHTML(k.countDelta)}</div>${sparkline(series.map(s => s.count), 'var(--brand)')}</div>
+      <div class="kpi" data-kpi="panier"><div class="label">Panier moyen</div><div class="row"><span class="value" data-target="${k.panier}" data-format="eur">${fmtEUR(k.panier)}</span>${deltaHTML(k.panierDelta)}</div>${sparkline(series.map(s => s.count ? s.ca / s.count : 0), 'var(--brand)')}</div>
+      <div class="kpi" data-kpi="taux"><div class="label">Taux de retour</div><div class="row"><span class="value" data-target="${k.tauxRetour}" data-format="pct">${k.tauxRetour.toFixed(1)}%</span>${deltaHTML(-k.tauxRetourDelta, true)}</div>${sparkline(series.map(s => s.count ? (s.retours / s.count) * 100 : 0), k.tauxRetourDelta > 0 ? 'var(--critical)' : 'var(--brand)')}</div>
     </div>
 
     <div class="grid">
@@ -1715,7 +1719,82 @@ function pageOverview() {
         </div>` : ''}
       ` : `<div class="empty">Pas encore assez de ventes pour dégager des tendances (au moins 5 commandes nécessaires).</div>`}
     </div>
+    </div>
   `;
+}
+
+/* ---------- overview: live sync indicator + entrance/count-up animations ---------- */
+let lastSyncedAt = null;
+function markSynced() { lastSyncedAt = Date.now(); const el = document.getElementById('syncIndicatorText'); if (el) el.textContent = syncLabel(); }
+function syncLabel() {
+  if (!lastSyncedAt) return 'Synchronisation…';
+  const sec = Math.round((Date.now() - lastSyncedAt) / 1000);
+  if (sec < 10) return 'Synchronisé à l\'instant';
+  if (sec < 60) return `Synchronisé il y a ${sec}s`;
+  return `Synchronisé il y a ${Math.round(sec / 60)} min`;
+}
+setInterval(() => { const el = document.getElementById('syncIndicatorText'); if (el) el.textContent = syncLabel(); }, 15000);
+
+function prefersReducedMotion() { return window.matchMedia('(prefers-reduced-motion: reduce)').matches; }
+function formatKPIValue(format, v) {
+  if (format === 'eur') return fmtEUR(v);
+  if (format === 'pct') return `${v.toFixed(1)}%`;
+  return fmtNum(Math.round(v));
+}
+// Tweens each KPI's displayed number from its last-shown value (0 on first render) up to
+// the fresh target, and briefly pulses the card when a live background sync actually moved
+// the number — small enough to skip entirely under prefers-reduced-motion.
+const kpiPrevValues = {};
+function animateKPIs() {
+  document.querySelectorAll('.kpi[data-kpi] .value[data-target]').forEach(el => {
+    const kpiEl = el.closest('.kpi');
+    const key = kpiEl.dataset.kpi;
+    const target = Number(el.dataset.target);
+    const from = kpiPrevValues[key] ?? 0;
+    const changed = kpiPrevValues[key] !== undefined && Math.abs(from - target) > 0.005;
+    if (prefersReducedMotion()) {
+      el.textContent = formatKPIValue(el.dataset.format, target);
+    } else {
+      const duration = 650;
+      const start = performance.now();
+      (function tick(now) {
+        const p = Math.min(1, (now - start) / duration);
+        const eased = 1 - Math.pow(1 - p, 3);
+        el.textContent = formatKPIValue(el.dataset.format, from + (target - from) * eased);
+        if (p < 1) requestAnimationFrame(tick);
+      })(start);
+    }
+    kpiPrevValues[key] = target;
+    if (changed) {
+      kpiEl.classList.remove('kpi-pulse');
+      void kpiEl.offsetWidth;
+      kpiEl.classList.add('kpi-pulse');
+    }
+  });
+}
+// SVG line charts render fully drawn by default (so they're correct with JS/animation
+// disabled) — this retroactively measures the real path length and animates it drawing in,
+// which a fixed dasharray guess can't do accurately across wildly different data shapes.
+function animateChartDrawIn(svg) {
+  if (!svg || prefersReducedMotion()) return;
+  const line = svg.querySelector('polyline');
+  if (line) {
+    const len = line.getTotalLength();
+    line.style.transition = 'none';
+    line.style.strokeDasharray = `${len}`;
+    line.style.strokeDashoffset = `${len}`;
+    line.getBoundingClientRect();
+    line.style.transition = 'stroke-dashoffset 900ms cubic-bezier(.22,.61,.36,1)';
+    line.style.strokeDashoffset = '0';
+  }
+  const area = svg.querySelector('polygon');
+  if (area) {
+    area.style.transition = 'none';
+    area.style.opacity = '0';
+    area.getBoundingClientRect();
+    area.style.transition = 'opacity 700ms ease 250ms';
+    area.style.opacity = '1';
+  }
 }
 function deltaHTML(delta, isPoint) {
   const pos = delta >= 0;
@@ -2478,6 +2557,15 @@ function render() {
     const series = trendSeries(bounds, granularity);
     wireTrendChart(trendChartSVG(series, granularity, 'ca', 'ca').coords, granularity, 'ca', fmtEUR);
     wireTrendChart(trendChartSVG(series, granularity, 'cnt', 'count').coords, granularity, 'cnt', v => `${fmtNum(v)} vente${v !== 1 ? 's' : ''}`);
+    animateKPIs();
+    animateChartDrawIn(document.getElementById('caSvg'));
+    animateChartDrawIn(document.getElementById('cntSvg'));
+    main.querySelectorAll('.kpi .spark').forEach(animateChartDrawIn);
+    if (!prefersReducedMotion()) {
+      main.querySelectorAll('.overview-page .kpi, .overview-page .card').forEach((el, i) => {
+        el.style.animationDelay = `${Math.min(i * 45, 380)}ms`;
+      });
+    }
   }
 }
 
