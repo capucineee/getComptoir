@@ -1697,10 +1697,16 @@ function statusMeta(status) {
   const map = { livree: ['good', 'Livrée'], preparation: ['warning', 'En préparation'], retour: ['critical', 'Retour'] };
   return map[status];
 }
+// A real connector's order carries its actual reference from the source (Shopify's order
+// id, WooCommerce's, or whatever a custom site sends as externalId) — showing Comptoir's
+// own internal orderNumber instead would mean it never lines up with what the merchant
+// sees on her own platform or site. Falls back to the internal number only for orders that
+// genuinely have no external reference (demo data, or a manual/simulated entry).
+function orderDisplayRef(o) { return o.externalId ? `#${o.externalId}` : `#${o.orderNumber}`; }
 function orderRow(o, withDate) {
   const [cls, label] = statusMeta(o.status);
   return `<tr>
-    <td>#${o.orderNumber}</td>
+    <td>${orderDisplayRef(o)}</td>
     <td><span class="chan-dot"><span class="sw" style="background:${channelColor(o.channelType)}"></span>${connectorLabel(o.channelType)}</span></td>
     <td>${escapeHTML(o.customer)}</td>
     ${withDate ? `<td>${fmtDate(o.date)}</td>` : ''}
@@ -1726,7 +1732,7 @@ function pageVentes() {
   if (salesFilter.status !== 'all') list = list.filter(o => o.status === salesFilter.status);
   if (salesFilter.q) {
     const q = salesFilter.q.toLowerCase();
-    list = list.filter(o => o.customer.toLowerCase().includes(q) || String(o.orderNumber).includes(q));
+    list = list.filter(o => o.customer.toLowerCase().includes(q) || String(o.orderNumber).includes(q) || (o.externalId && String(o.externalId).toLowerCase().includes(q)));
   }
   const matchCount = list.length;
   const truncated = matchCount > 120;
@@ -1768,7 +1774,7 @@ function ventesOrderRow(o) {
   const [cls, label] = statusMeta(o.status);
   const product = state.products.find(p => p.id === o.productId);
   return `<tr data-action="openOrderDetail" data-id="${o.id}" class="row-click" role="button" tabindex="0">
-    <td>#${o.orderNumber}</td>
+    <td>${orderDisplayRef(o)}</td>
     <td><span class="chan-dot"><span class="sw" style="background:${channelColor(o.channelType)}"></span>${connectorLabel(o.channelType)}</span></td>
     <td>${escapeHTML(o.customer)}</td>
     <td>${product ? escapeHTML(product.name) : '<span style="color:var(--ink-faint)">—</span>'}</td>
@@ -2320,7 +2326,7 @@ function exportAccountingCSV() {
     const margin = isRefund ? -o.amount : ht - cost;
     return [
       new Date(o.date).toLocaleDateString('fr-FR'),
-      `#${o.orderNumber}`,
+      orderDisplayRef(o),
       connectorLabel(o.channelType),
       o.customer,
       isRefund ? 'Retour' : 'Vente',
@@ -2635,7 +2641,7 @@ function openOrderDetailModal(orderId) {
   const [cls, label] = statusMeta(o.status);
   const product = state.products.find(p => p.id === o.productId);
   openModal(`
-    <h3>Commande #${o.orderNumber}</h3>
+    <h3>Commande ${orderDisplayRef(o)}</h3>
     <div class="modal-sub">${connectorLabel(o.channelType)} · ${fmtDateTime(o.date)}</div>
     <div class="detail-grid">
       <div class="item"><div class="k">Cliente</div><div class="v">${escapeHTML(o.customer)}</div></div>

@@ -208,6 +208,28 @@
     </table>
   </div>
 
+  <h2><span class="n">05</span>Synchroniser en masse</h2>
+  <p class="section-sub">Si votre site n'a pas de système d'événements pour prévenir Comptoir à chaque changement (pas de webhook), le plus simple est d'envoyer <b>toutes vos commandes d'un coup</b>, régulièrement (par exemple une fois par heure, via une tâche planifiée sur votre site). Chaque commande est traitée exactement comme un appel individuel : une commande déjà connue (même <code>externalId</code>) est mise à jour si son statut a changé, jamais dupliquée.</p>
+
+  <div class="code-label">Endpoint</div>
+  <pre id="bulkEndpointLine">POST /api/ingest/orders/bulk</pre>
+
+  <div class="code-label">Exemple — curl</div>
+  <pre id="bulkCurlExample"><span class="c">curl -X POST</span> /api/ingest/orders/bulk \
+  -H <span class="s">"Authorization: Bearer VOTRE_CLÉ_API"</span> \
+  -H <span class="s">"Content-Type: application/json"</span> \
+  -d <span class="s">'{
+    "orders": [
+      { "externalId": "CMD-1234", "amount": 42.90, "status": "livree" },
+      { "externalId": "CMD-1235", "amount": 18.00, "status": "retour" }
+    ]
+  }'</span></pre>
+
+  <div class="callout">
+    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="10" cy="10" r="8.2"/><path d="M10 6.5v4M10 13.2v.1"/></svg>
+    <div>Limité à 500 commandes par appel. La réponse détaille combien ont été créées, mises à jour, laissées inchangées, ou en échec — une commande invalide dans le lot n'empêche pas les autres d'être traitées.</div>
+  </div>
+
   <footer>Comptoir — Vendez partout. Comptez ici.</footer>
 </div>
 
@@ -219,6 +241,9 @@
     const el = document.getElementById(id);
     el.innerHTML = el.innerHTML.replace('/api/ingest/orders', origin + '/api/ingest/orders');
   });
+  document.getElementById('bulkEndpointLine').textContent = 'POST ' + origin + '/api/ingest/orders/bulk';
+  const bulkEl = document.getElementById('bulkCurlExample');
+  bulkEl.innerHTML = bulkEl.innerHTML.replace('/api/ingest/orders/bulk', origin + '/api/ingest/orders/bulk');
 </script>
 </body>
 </html>

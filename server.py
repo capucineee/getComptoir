@@ -1108,6 +1108,47 @@ def handle_ingest_order(api_key, body):
     return _ingest_order_core(conn, row["user_id"], row["channel_type"], row["connector_id"], body)
 
 
+MAX_BULK_INGEST_ORDERS = 500
+
+
+def handle_ingest_orders_bulk(api_key, body):
+    """A homemade site has no platform-native webhook system to tell Comptoir when an
+    order's status changes later — POST /api/ingest/orders only ever covers the moment it's
+    called. Rather than requiring the site's own code to be instrumented at every place an
+    order can change (unrealistic for a lot of small custom sites), this lets it push its
+    FULL current order list in one call, on whatever schedule the site owner sets up
+    (a cron job, a button, on each of their own admin page loads...) — each item goes
+    through the exact same matching-by-externalId logic as the single-order endpoint, so
+    a resend of an unchanged order is a no-op and a changed one updates in place."""
+    if not api_key:
+        raise ApiError(401, "Clé API manquante.")
+    if not isinstance(body, dict) or not isinstance(body.get("orders"), list) or not body["orders"]:
+        raise ApiError(400, "Le corps de la requête doit contenir un tableau « orders » non vide.")
+    if len(body["orders"]) > MAX_BULK_INGEST_ORDERS:
+        raise ApiError(400, f"Maximum {MAX_BULK_INGEST_ORDERS} commandes par appel groupé.")
+
+    results = []
+    for i, order_body in enumerate(body["orders"]):
+        conn = get_db()
+        row = conn.execute(
+            "SELECT user_id, connector_id, channel_type FROM api_keys WHERE key = ?", (api_key,)
+        ).fetchone()
+        if not row:
+            conn.close()
+            raise ApiError(401, "Clé API invalide ou révoquée.")
+        try:
+            result = _ingest_order_core(conn, row["user_id"], row["channel_type"], row["connector_id"], order_body)
+            results.append({"index": i, "ok": True, **result})
+        except ApiError as e:
+            results.append({"index": i, "ok": False, "error": e.message})
+
+    created = sum(1 for r in results if r["ok"] and not r.get("duplicate"))
+    updated = sum(1 for r in results if r["ok"] and r.get("duplicate") and r.get("updated"))
+    unchanged = sum(1 for r in results if r["ok"] and r.get("duplicate") and not r.get("updated"))
+    failed = sum(1 for r in results if not r["ok"])
+    return {"ok": True, "total": len(results), "created": created, "updated": updated, "unchanged": unchanged, "failed": failed, "results": results}
+
+
 def _ingest_order_core(conn, user_id: str, channel_type: str, connector_id: str, body: dict):
     """Shared by every real inbound order path — today the custom API connector
     (handle_ingest_order) and Shopify's order webhooks (handle_shopify_webhook). Takes
@@ -1795,6 +1836,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 return self._send_json(200, handle_connect_channel(self._bearer_token(), body))
             if path == "/api/ingest/orders":
                 return self._send_json(200, handle_ingest_order(self._bearer_token(), body))
+            if path == "/api/ingest/orders/bulk":
+                return self._send_json(200, handle_ingest_orders_bulk(self._bearer_token(), body))
             if path == "/api/billing/checkout":
                 return self._send_json(200, handle_billing_checkout(self._bearer_token(), body))
             if path == "/api/billing/portal":
