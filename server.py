@@ -801,6 +801,43 @@ def handle_get_state(token):
     return {"data": row["data"] if row else None}
 
 
+def _parse_ts(ts):
+    if not ts:
+        return 0.0
+    try:
+        return datetime.fromisoformat(str(ts).replace("Z", "+00:00")).timestamp()
+    except (ValueError, TypeError):
+        return 0.0
+
+
+def _merge_touched_collection(server_list, client_list):
+    """Per-record last-write-wins merge, keyed by id and compared by each record's own
+    'updatedAt' stamp. Exists because orders and products aren't exclusively client-owned:
+    a real connector (webhook, or a homemade site's own periodic bulk resync — see
+    /api/ingest/orders/bulk) can update one server-side at any moment, with no way to
+    tell an already-open browser tab. Without this, that tab's next PUT /api/state (its
+    full, possibly now-stale snapshot, sent for an entirely unrelated reason — switching
+    theme, changing the date range...) would silently overwrite the fresher server-side
+    change. A record present on the server but missing from the client's payload is kept
+    rather than dropped — this app never lets the client delete an order or product, so a
+    gap only ever means a stale/partial client payload, never an intentional deletion."""
+    server_by_id = {r.get("id"): r for r in server_list if r.get("id")}
+    seen = set()
+    merged = []
+    for client_rec in client_list:
+        rid = client_rec.get("id")
+        server_rec = server_by_id.get(rid) if rid else None
+        if server_rec is None:
+            merged.append(client_rec)
+        else:
+            seen.add(rid)
+            merged.append(server_rec if _parse_ts(server_rec.get("updatedAt")) >= _parse_ts(client_rec.get("updatedAt")) else client_rec)
+    for rid, server_rec in server_by_id.items():
+        if rid not in seen:
+            merged.append(server_rec)
+    return merged
+
+
 def handle_put_state(token, body):
     user = user_from_token(token)
     if not user:
@@ -810,16 +847,29 @@ def handle_put_state(token, body):
     if len(body["data"]) > MAX_STATE_BYTES:
         raise ApiError(413, "Données trop volumineuses.")
     try:
-        json.loads(body["data"])  # must itself be valid JSON
+        client_data = json.loads(body["data"])  # must itself be valid JSON
     except json.JSONDecodeError:
         raise ApiError(400, "Le champ « data » doit être du JSON valide.")
     conn = get_db()
-    conn.execute(
-        """INSERT INTO app_state (user_id, data, updated_at) VALUES (?, ?, datetime('now'))
-           ON CONFLICT(user_id) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at""",
-        (user["id"], body["data"]),
-    )
-    conn.commit()
+    with STATE_LOCK:
+        row = conn.execute("SELECT data FROM app_state WHERE user_id = ?", (user["id"],)).fetchone()
+        if row and isinstance(client_data, dict):
+            try:
+                server_data = json.loads(row["data"])
+            except json.JSONDecodeError:
+                server_data = None
+            if isinstance(server_data, dict):
+                if isinstance(client_data.get("orders"), list) and isinstance(server_data.get("orders"), list):
+                    client_data["orders"] = _merge_touched_collection(server_data["orders"], client_data["orders"])
+                if isinstance(client_data.get("products"), list) and isinstance(server_data.get("products"), list):
+                    client_data["products"] = _merge_touched_collection(server_data["products"], client_data["products"])
+        new_data = json.dumps(client_data)
+        conn.execute(
+            """INSERT INTO app_state (user_id, data, updated_at) VALUES (?, ?, datetime('now'))
+               ON CONFLICT(user_id) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at""",
+            (user["id"], new_data),
+        )
+        conn.commit()
     conn.close()
     return {"ok": True}
 
@@ -1223,6 +1273,8 @@ def _ingest_order_core(conn, user_id: str, channel_type: str, connector_id: str,
     quantity = _parse_amount(quantity_raw)
     quantity = int(quantity) if quantity and quantity > 0 else 1
 
+    now_iso = datetime.now(timezone.utc).isoformat()
+
     with STATE_LOCK:
         state_row = conn.execute("SELECT data FROM app_state WHERE user_id = ?", (user_id,)).fetchone()
         if not state_row:
@@ -1250,6 +1302,7 @@ def _ingest_order_core(conn, user_id: str, channel_type: str, connector_id: str,
                 "supplier": "",
                 "custom": {},
                 "channels": [],
+                "updatedAt": now_iso,
             }
             products.append(new_product)
             return new_product["id"]
@@ -1274,6 +1327,7 @@ def _ingest_order_core(conn, user_id: str, channel_type: str, connector_id: str,
                     if reverse:
                         delta = -delta
                     product["stock"] = max(0, (product.get("stock", 0) or 0) + delta)
+                    product["updatedAt"] = now_iso
 
                 had_product_id = bool(existing.get("productId"))
                 if not had_product_id and product_name:
@@ -1306,6 +1360,7 @@ def _ingest_order_core(conn, user_id: str, channel_type: str, connector_id: str,
                     changed = True
 
                 if changed:
+                    existing["updatedAt"] = now_iso
                     new_data = json.dumps(data)
                     conn.execute(
                         "UPDATE app_state SET data = ?, updated_at = datetime('now') WHERE user_id = ?",
@@ -1347,6 +1402,7 @@ def _ingest_order_core(conn, user_id: str, channel_type: str, connector_id: str,
             if product is not None:
                 current = product.get("stock", 0) or 0
                 product["stock"] = current + quantity if status == "retour" else max(0, current - quantity)
+                product["updatedAt"] = now_iso
 
         next_number = max([o.get("orderNumber", 0) for o in orders], default=1000) + 1
         order = {
@@ -1362,6 +1418,7 @@ def _ingest_order_core(conn, user_id: str, channel_type: str, connector_id: str,
             "date": date,
             "custom": _extract_extra_fields(body) if isinstance(body, dict) else {},
             "externalId": external_id,
+            "updatedAt": now_iso,
         }
         orders.insert(0, order)
 

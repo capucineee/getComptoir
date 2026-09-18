@@ -2910,9 +2910,15 @@ document.addEventListener('click', e => {
           const oldDelta = o.status === 'retour' ? qty : -qty;
           const newDelta = statusSelect.value === 'retour' ? qty : -qty;
           product.stock = Math.max(0, (product.stock || 0) - oldDelta + newDelta);
+          product.updatedAt = new Date().toISOString();
         }
         o.status = statusSelect.value;
       }
+      // Stamped on every save (even one that only touched a custom field) — the server
+      // merges orders/products by this timestamp on PUT /api/state (last-write-wins),
+      // so a real connector's own update landing around the same time isn't silently
+      // clobbered by this tab's now-stale full-state snapshot.
+      o.updatedAt = new Date().toISOString();
       persist();
     }
     closeModal(); render(); toast('Commande mise à jour.');
@@ -2949,7 +2955,7 @@ document.addEventListener('click', e => {
     const threshold = Number(document.getElementById('pThreshold').value) || 0;
     const costPrice = Math.max(0, Number(document.getElementById('pCost').value) || 0);
     const channel = document.getElementById('pChannel').value;
-    state.products.unshift({ id: uid(), name, stock, threshold, costPrice, salePrice: null, supplier: '', custom: {}, channels: channel ? [channel] : [] });
+    state.products.unshift({ id: uid(), name, stock, threshold, costPrice, salePrice: null, supplier: '', custom: {}, channels: channel ? [channel] : [], updatedAt: new Date().toISOString() });
     persist(); closeModal(); render(); toast(`« ${name} » ajouté au suivi de stock.`);
     return;
   }
@@ -2973,7 +2979,7 @@ document.addEventListener('click', e => {
   if (action === 'clearCatalogFilter') { catalogFilterIncomplete = false; render(); return; }
   if (action === 'useSuggestedSalePrice') {
     const p = state.products.find(p => p.id === el.dataset.id);
-    if (p) { p.salePrice = Number(el.dataset.price) || 0; persist(); render(); toast('Prix de revente renseigné depuis la dernière vente.'); }
+    if (p) { p.salePrice = Number(el.dataset.price) || 0; p.updatedAt = new Date().toISOString(); persist(); render(); toast('Prix de revente renseigné depuis la dernière vente.'); }
     return;
   }
   if (action === 'exportCatalog') { exportCatalogCSV(); return; }
@@ -3030,6 +3036,7 @@ document.addEventListener('click', e => {
           p.custom[newFieldIds[idx]] = raw;
         }
       });
+      p.updatedAt = new Date().toISOString();
     });
 
     pendingCatalogImport = null;
@@ -3330,25 +3337,25 @@ document.addEventListener('keydown', e => {
 document.addEventListener('input', e => {
   if (e.target.matches('[data-stock-id]')) {
     const p = state.products.find(p => p.id === e.target.dataset.stockId);
-    if (p) { p.stock = clamp(Number(e.target.value) || 0, 0, 99999); persist(); }
+    if (p) { p.stock = clamp(Number(e.target.value) || 0, 0, 99999); p.updatedAt = new Date().toISOString(); persist(); }
     const row = e.target.closest('tr');
     if (row) row.querySelector('.status-chip').outerHTML = `<span class="status-chip ${alertLevel(p)}"><span class="dot"></span>${alertLevel(p) === 'good' ? 'OK' : alertLevel(p) === 'warning' ? 'Vigilance' : 'Critique'}</span>`;
   }
   if (e.target.matches('[data-cost-id]')) {
     const p = state.products.find(p => p.id === e.target.dataset.costId);
-    if (p) { p.costPrice = Math.max(0, Number(e.target.value) || 0); persist(); }
+    if (p) { p.costPrice = Math.max(0, Number(e.target.value) || 0); p.updatedAt = new Date().toISOString(); persist(); }
   }
   if (e.target.matches('[data-supplier-id]')) {
     const p = state.products.find(p => p.id === e.target.dataset.supplierId);
-    if (p) { p.supplier = e.target.value; persist(); }
+    if (p) { p.supplier = e.target.value; p.updatedAt = new Date().toISOString(); persist(); }
   }
   if (e.target.matches('[data-sale-price-id]')) {
     const p = state.products.find(p => p.id === e.target.dataset.salePriceId);
-    if (p) { p.salePrice = e.target.value === '' ? null : Math.max(0, Number(e.target.value) || 0); persist(); }
+    if (p) { p.salePrice = e.target.value === '' ? null : Math.max(0, Number(e.target.value) || 0); p.updatedAt = new Date().toISOString(); persist(); }
   }
   if (e.target.matches('[data-catalog-custom-id]')) {
     const p = state.products.find(p => p.id === e.target.dataset.catalogCustomId);
-    if (p) { p.custom[e.target.dataset.fieldId] = e.target.value; persist(); }
+    if (p) { p.custom[e.target.dataset.fieldId] = e.target.value; p.updatedAt = new Date().toISOString(); persist(); }
   }
   if (e.target.id === 'salesSearch') { salesFilter.q = e.target.value; renderKeepFocus('salesSearch'); }
 });
