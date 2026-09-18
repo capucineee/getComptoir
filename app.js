@@ -320,6 +320,33 @@ function persist() {
 }
 function setState(patch) { Object.assign(state, patch); persist(); render(); }
 
+// Real connectors (Shopify, WooCommerce, custom) receive orders via webhook, entirely on
+// the server, with no way to tell an already-open browser tab that anything changed — the
+// tab keeps showing whatever it loaded at boot() until something re-fetches. This is that
+// re-fetch: pulls orders and products (the only two collections a webhook can actually
+// touch — ingestion creates/updates orders and adjusts or auto-creates products; it never
+// touches connectors, custom field definitions, or any other local/UI state), so refreshing
+// can't stomp on something the user is actively editing elsewhere in the app.
+async function refreshStateFromServer({ silent = false } = {}) {
+  const session = getSession();
+  if (!session || !session.token) return;
+  // Skip while a modal is open — most likely mid-edit (typing into a field, reviewing a
+  // stock conflict) and a silent state swap underneath that would be jarring or lose input.
+  if (document.getElementById('modalRoot').innerHTML.trim()) return;
+  try {
+    const res = await apiRequest('/api/state', { token: session.token });
+    if (!res.data) return;
+    const fresh = migrateState(JSON.parse(res.data));
+    state.orders = fresh.orders;
+    state.products = fresh.products;
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    render();
+    if (!silent) toast('Données synchronisées.');
+  } catch (err) {
+    if (!silent) toast('Échec de la synchronisation.', true);
+  }
+}
+
 /* ---------- theme ---------- */
 const mq = window.matchMedia('(prefers-color-scheme: dark)');
 function resolvedTheme() { return state.theme === 'light' || state.theme === 'dark' ? state.theme : (mq.matches ? 'dark' : 'light'); }
@@ -1110,6 +1137,12 @@ async function boot() {
       toast('La connexion à Shopify a échoué — réessayez.', true);
     }
   }
+
+  // Real orders (Shopify/WooCommerce/custom webhooks) can land at any moment, entirely
+  // server-side — this is what keeps an already-open tab from just sitting on stale data
+  // indefinitely. Silent: a toast every 45s for a background sync would be more noise than
+  // signal; the visible effect is the page updating on its own next render.
+  setInterval(() => refreshStateFromServer({ silent: true }), 45000);
 }
 
 /* ---------- toasts ---------- */
@@ -3030,9 +3063,20 @@ document.addEventListener('click', e => {
     if (!c) return;
     c.lastSync = new Date().toISOString();
     persist(); render();
-    const conflict = findStockConflict(c.type);
-    if (conflict) { openStockConflictModal(conflict, c); return; }
-    toast(`${c.label} resynchronisé.`);
+    const REAL_TYPES = ['shopify', 'woocommerce', 'custom'];
+    if (REAL_TYPES.includes(c.type)) {
+      // Real orders arrive by webhook regardless of this button — there is nothing to
+      // trigger on Shopify/WooCommerce's side. What this button can actually do is pull
+      // whatever already arrived there and hasn't shown up in this tab yet.
+      refreshStateFromServer().then(() => {
+        const conflict = findStockConflict(c.type);
+        if (conflict) openStockConflictModal(conflict, c);
+      });
+    } else {
+      const conflict = findStockConflict(c.type);
+      if (conflict) { openStockConflictModal(conflict, c); return; }
+      toast(`${c.label} resynchronisé.`);
+    }
     return;
   }
   if (action === 'resolveConflict') {
