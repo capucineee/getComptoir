@@ -1640,9 +1640,34 @@ function pageOverview() {
 
     <div class="grid">
       <div class="card">
-        <h2>Chiffre d'affaires — ${rangeLabel(bounds)}</h2>
-        <div class="card-sub">Tous canaux confondus</div>
-        <div class="chart-wrap" id="caWrap">${caChart.svg}<div class="tooltip" id="caTooltip"></div></div>
+        <h2>Commandes récentes</h2>
+        <div class="card-sub">Tous canaux</div>
+        <table class="data">
+          <thead><tr><th>Commande</th><th>Canal</th><th>Cliente</th><th style="text-align:right">Montant</th><th>Statut</th></tr></thead>
+          <tbody>${recent.map(o => orderRow(o)).join('')}</tbody>
+        </table>
+      </div>
+      <div class="card">
+        <h2>Alertes stock</h2>
+        <div class="card-sub">${alerts.length ? `${fmtNum(alerts.length)} produit${alerts.length !== 1 ? 's' : ''} sous le seuil — les plus critiques d'abord` : 'Produits sous le seuil'}</div>
+        ${alerts.length ? alerts.slice(0, 6).map(p => `
+          <div class="alert-row">
+            <div class="product">${escapeHTML(p.name)}<span class="chan">${p.channels.map(connectorLabel).join(' + ')}</span></div>
+            <span class="status-chip ${alertLevel(p)}"><span class="dot"></span>${p.stock} restants</span>
+          </div>`).join('') : `<div class="empty">Tous les stocks sont au-dessus du seuil.</div>`}
+        ${alerts.length > 6 ? `<div class="card-sub" style="margin-top:10px;">${fmtNum(alerts.length - 6)} autre${alerts.length - 6 !== 1 ? 's' : ''} produit${alerts.length - 6 !== 1 ? 's' : ''} concerné${alerts.length - 6 !== 1 ? 's' : ''} — <a href="#stock" style="color:var(--brand)">voir tout le stock →</a></div>` : ''}
+      </div>
+    </div>
+
+    <div class="grid">
+      <div class="card">
+        <h2>Produits les plus vendus</h2>
+        <div class="card-sub">${rangeLabel(bounds)} · classé par quantité vendue</div>
+        ${bestSellers.length ? bestSellers.map(r => `
+          <div class="alert-row">
+            <div class="product">${escapeHTML(r.product.name)}<span class="chan">${fmtEUR(r.revenue)} de CA</span></div>
+            <span class="status-chip good"><span class="dot"></span>${fmtNum(r.qty)} vendu${r.qty !== 1 ? 's' : ''}</span>
+          </div>`).join('') : `<div class="empty">Aucune vente liée à un produit sur cette période.</div>`}
       </div>
       <div class="card">
         <h2>Répartition par canal</h2>
@@ -1653,6 +1678,12 @@ function pageOverview() {
             <div class="chan-bar"><div style="width:${b.pct}%; background:${channelColor(b.type)}"></div></div>
           </div>`).join('') : `<div class="empty">Aucune vente sur cette période.</div>`}
       </div>
+    </div>
+
+    <div class="card" style="margin-bottom:14px;">
+      <h2>Chiffre d'affaires — ${rangeLabel(bounds)}</h2>
+      <div class="card-sub">Tous canaux confondus</div>
+      <div class="chart-wrap" id="caWrap">${caChart.svg}<div class="tooltip" id="caTooltip"></div></div>
     </div>
 
     <div class="card" style="margin-bottom:14px;">
@@ -1683,37 +1714,6 @@ function pageOverview() {
           ${habitMonthsHTML(habits.monthRanked)}
         </div>` : ''}
       ` : `<div class="empty">Pas encore assez de ventes pour dégager des tendances (au moins 5 commandes nécessaires).</div>`}
-    </div>
-
-    <div class="card" style="margin-bottom:14px;">
-      <h2>Produits les plus vendus</h2>
-      <div class="card-sub">${rangeLabel(bounds)} · classé par quantité vendue</div>
-      ${bestSellers.length ? bestSellers.map(r => `
-        <div class="alert-row">
-          <div class="product">${escapeHTML(r.product.name)}<span class="chan">${fmtEUR(r.revenue)} de CA</span></div>
-          <span class="status-chip good"><span class="dot"></span>${fmtNum(r.qty)} vendu${r.qty !== 1 ? 's' : ''}</span>
-        </div>`).join('') : `<div class="empty">Aucune vente liée à un produit sur cette période.</div>`}
-    </div>
-
-    <div class="grid">
-      <div class="card">
-        <h2>Commandes récentes</h2>
-        <div class="card-sub">Tous canaux</div>
-        <table class="data">
-          <thead><tr><th>Commande</th><th>Canal</th><th>Cliente</th><th style="text-align:right">Montant</th><th>Statut</th></tr></thead>
-          <tbody>${recent.map(o => orderRow(o)).join('')}</tbody>
-        </table>
-      </div>
-      <div class="card">
-        <h2>Alertes stock</h2>
-        <div class="card-sub">${alerts.length ? `${fmtNum(alerts.length)} produit${alerts.length !== 1 ? 's' : ''} sous le seuil — les plus critiques d'abord` : 'Produits sous le seuil'}</div>
-        ${alerts.length ? alerts.slice(0, 6).map(p => `
-          <div class="alert-row">
-            <div class="product">${escapeHTML(p.name)}<span class="chan">${p.channels.map(connectorLabel).join(' + ')}</span></div>
-            <span class="status-chip ${alertLevel(p)}"><span class="dot"></span>${p.stock} restants</span>
-          </div>`).join('') : `<div class="empty">Tous les stocks sont au-dessus du seuil.</div>`}
-        ${alerts.length > 6 ? `<div class="card-sub" style="margin-top:10px;">${fmtNum(alerts.length - 6)} autre${alerts.length - 6 !== 1 ? 's' : ''} produit${alerts.length - 6 !== 1 ? 's' : ''} concerné${alerts.length - 6 !== 1 ? 's' : ''} — <a href="#stock" style="color:var(--brand)">voir tout le stock →</a></div>` : ''}
-      </div>
     </div>
   `;
 }
