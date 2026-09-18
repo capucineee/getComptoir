@@ -1277,12 +1277,13 @@ function trendSeries(bounds, granularity) {
   }
   if (!keys.length) keys.push(bucketStart(bounds.from, granularity).getTime());
   const map = {};
-  keys.forEach(t => { map[t] = { t, ca: 0, count: 0 }; });
+  keys.forEach(t => { map[t] = { t, ca: 0, count: 0, retours: 0 }; });
   cur.forEach(o => {
     const key = bucketKey(new Date(o.date), granularity);
     if (!map[key]) return;
     map[key].ca += o.amount;
     map[key].count += 1;
+    if (o.status === 'retour') map[key].retours += 1;
   });
   return keys.map(t => map[t]);
 }
@@ -1294,6 +1295,23 @@ function channelBreakdown(bounds) {
   return Object.entries(byType)
     .map(([type, amount]) => ({ type, amount, pct: Math.round((amount / total) * 100) }))
     .sort((a, b) => b.amount - a.amount);
+}
+// Ranked by quantity sold, not revenue — that's what "best-seller" means for restocking
+// decisions, and it's what Stock already tracks against. A returned order never sold
+// anything in the end, so it's excluded rather than counted as a real sale.
+function topProducts(bounds, limit = 6) {
+  const cur = ordersInRange(bounds).filter(o => o.status !== 'retour' && o.productId);
+  const byProduct = {};
+  cur.forEach(o => {
+    const entry = byProduct[o.productId] || (byProduct[o.productId] = { productId: o.productId, qty: 0, revenue: 0 });
+    entry.qty += o.quantity || 1;
+    entry.revenue += o.amount;
+  });
+  return Object.values(byProduct)
+    .map(r => ({ ...r, product: state.products.find(p => p.id === r.productId) }))
+    .filter(r => r.product)
+    .sort((a, b) => b.qty - a.qty)
+    .slice(0, limit);
 }
 const VAT_RATE = 0.20;
 function orderProduct(o) { return state.products.find(p => p.id === o.productId) || null; }
@@ -1584,6 +1602,7 @@ function pageOverview() {
   const caChart = trendChartSVG(series, granularity, 'ca', 'ca');
   const cntChart = trendChartSVG(series, granularity, 'cnt', 'count');
   const breakdown = channelBreakdown(bounds);
+  const bestSellers = topProducts(bounds);
   const habits = computeSalesHabits();
   const alerts = stockAlerts();
   const recent = state.orders.slice(0, 6);
@@ -1614,9 +1633,9 @@ function pageOverview() {
 
     <div class="kpis">
       <div class="kpi"><div class="label">Chiffre d'affaires</div><div class="row"><span class="value">${fmtEUR(k.ca)}</span>${deltaHTML(k.caDelta)}</div>${sparkline(series.map(s => s.ca), 'var(--brand)')}</div>
-      <div class="kpi"><div class="label">Commandes</div><div class="row"><span class="value">${fmtNum(k.count)}</span>${deltaHTML(k.countDelta)}</div>${sparkline(series.map(s => s.ca), 'var(--brand)')}</div>
-      <div class="kpi"><div class="label">Panier moyen</div><div class="row"><span class="value">${fmtEUR(k.panier)}</span>${deltaHTML(k.panierDelta)}</div>${sparkline(series.map(s => s.ca), 'var(--brand)')}</div>
-      <div class="kpi"><div class="label">Taux de retour</div><div class="row"><span class="value">${k.tauxRetour.toFixed(1)}%</span>${deltaHTML(-k.tauxRetourDelta, true)}</div>${sparkline(series.map(s => s.ca), k.tauxRetourDelta > 0 ? 'var(--critical)' : 'var(--brand)')}</div>
+      <div class="kpi"><div class="label">Commandes</div><div class="row"><span class="value">${fmtNum(k.count)}</span>${deltaHTML(k.countDelta)}</div>${sparkline(series.map(s => s.count), 'var(--brand)')}</div>
+      <div class="kpi"><div class="label">Panier moyen</div><div class="row"><span class="value">${fmtEUR(k.panier)}</span>${deltaHTML(k.panierDelta)}</div>${sparkline(series.map(s => s.count ? s.ca / s.count : 0), 'var(--brand)')}</div>
+      <div class="kpi"><div class="label">Taux de retour</div><div class="row"><span class="value">${k.tauxRetour.toFixed(1)}%</span>${deltaHTML(-k.tauxRetourDelta, true)}</div>${sparkline(series.map(s => s.count ? (s.retours / s.count) * 100 : 0), k.tauxRetourDelta > 0 ? 'var(--critical)' : 'var(--brand)')}</div>
     </div>
 
     <div class="grid">
@@ -1664,6 +1683,16 @@ function pageOverview() {
           ${habitMonthsHTML(habits.monthRanked)}
         </div>` : ''}
       ` : `<div class="empty">Pas encore assez de ventes pour dégager des tendances (au moins 5 commandes nécessaires).</div>`}
+    </div>
+
+    <div class="card" style="margin-bottom:14px;">
+      <h2>Produits les plus vendus</h2>
+      <div class="card-sub">${rangeLabel(bounds)} · classé par quantité vendue</div>
+      ${bestSellers.length ? bestSellers.map(r => `
+        <div class="alert-row">
+          <div class="product">${escapeHTML(r.product.name)}<span class="chan">${fmtEUR(r.revenue)} de CA</span></div>
+          <span class="status-chip good"><span class="dot"></span>${fmtNum(r.qty)} vendu${r.qty !== 1 ? 's' : ''}</span>
+        </div>`).join('') : `<div class="empty">Aucune vente liée à un produit sur cette période.</div>`}
     </div>
 
     <div class="grid">
