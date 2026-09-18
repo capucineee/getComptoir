@@ -2642,8 +2642,15 @@ function openOrderDetailModal(orderId) {
       <div class="item"><div class="k">Produit</div><div class="v">${product ? escapeHTML(product.name) : '<span style="color:var(--ink-faint)">Non lié à un produit</span>'}</div></div>
       <div class="item"><div class="k">Montant</div><div class="v">${fmtEUR(o.amount)}</div></div>
       <div class="item"><div class="k">Canal</div><div class="v"><span class="chan-dot"><span class="sw" style="background:${channelColor(o.channelType)}"></span>${connectorLabel(o.channelType)}</span></div></div>
-      <div class="item"><div class="k">Statut</div><div class="v"><span class="status-chip ${cls}"><span class="dot"></span>${label}</span></div></div>
+      <div class="item"><div class="k">Statut</div><div class="v">${o.channelType === 'custom' ? `
+        <select id="orderStatusSelect" data-order-id="${o.id}">
+          <option value="preparation" ${o.status === 'preparation' ? 'selected' : ''}>En préparation</option>
+          <option value="livree" ${o.status === 'livree' ? 'selected' : ''}>Livrée</option>
+          <option value="retour" ${o.status === 'retour' ? 'selected' : ''}>Retour</option>
+        </select>
+      ` : `<span class="status-chip ${cls}"><span class="dot"></span>${label}</span>`}</div></div>
     </div>
+    ${o.channelType === 'custom' ? `<div class="card-sub" style="margin-top:-6px; margin-bottom:14px;">Un site personnalisé n'a pas de webhook de mise à jour automatique — modifiez le statut ici quand il change réellement sur votre site.</div>` : ''}
     <div style="border-top:1px solid var(--rule-soft); padding-top:14px;">
       <div style="font-size:12.5px; color:var(--ink-faint); margin-bottom:12px;">Champs de suivi</div>
       ${state.customFields.length ? state.customFields.map(f => {
@@ -2768,6 +2775,21 @@ document.addEventListener('click', e => {
       document.querySelectorAll('[data-field-id]:not(:disabled)').forEach(inp => {
         o.custom[inp.dataset.fieldId] = inp.value.trim();
       });
+      const statusSelect = document.getElementById('orderStatusSelect');
+      if (statusSelect && statusSelect.value !== o.status) {
+        // Mirrors the server's own reverse-old/apply-new logic (server.py's
+        // _adjust_stock, used when a Shopify/WooCommerce webhook changes an order's
+        // status): only 'retour' releases stock back, so moving between preparation and
+        // livree is a no-op for stock, but crossing to or from retour is not.
+        const product = state.products.find(p => p.id === o.productId);
+        if (product) {
+          const qty = o.quantity || 1;
+          const oldDelta = o.status === 'retour' ? qty : -qty;
+          const newDelta = statusSelect.value === 'retour' ? qty : -qty;
+          product.stock = Math.max(0, (product.stock || 0) - oldDelta + newDelta);
+        }
+        o.status = statusSelect.value;
+      }
       persist();
     }
     closeModal(); render(); toast('Commande mise à jour.');
