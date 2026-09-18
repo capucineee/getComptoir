@@ -1721,7 +1721,7 @@ function pageVentes() {
       </div>
       ${list.length ? `<div class="table-scroll"><table class="data">
         <thead><tr>
-          <th>Commande</th><th>Canal</th><th>Cliente</th><th>Date</th><th style="text-align:right">Montant</th><th>Statut</th>
+          <th>Commande</th><th>Canal</th><th>Cliente</th><th>Produit</th><th>Date</th><th style="text-align:right">Montant</th><th>Statut</th>
           ${state.customFields.map(f => `<th>${f.label}<span class="field-remove" data-action="removeField" data-id="${f.id}" title="Retirer ce champ">×</span><span class="field-source">${fieldSourceLabel(f)}</span></th>`).join('')}
           <th><button class="btn sm" data-action="openAddField">+ Champ</button></th>
         </tr></thead>
@@ -1733,10 +1733,12 @@ function pageVentes() {
 }
 function ventesOrderRow(o) {
   const [cls, label] = statusMeta(o.status);
+  const product = state.products.find(p => p.id === o.productId);
   return `<tr data-action="openOrderDetail" data-id="${o.id}" class="row-click" role="button" tabindex="0">
     <td>#${o.orderNumber}</td>
     <td><span class="chan-dot"><span class="sw" style="background:${channelColor(o.channelType)}"></span>${connectorLabel(o.channelType)}</span></td>
     <td>${escapeHTML(o.customer)}</td>
+    <td>${product ? escapeHTML(product.name) : '<span style="color:var(--ink-faint)">—</span>'}</td>
     <td>${fmtDate(o.date)}</td>
     <td class="amount">${fmtEUR(o.amount)}</td>
     <td><span class="status-chip ${cls}"><span class="dot"></span>${label}</span></td>
@@ -2598,11 +2600,13 @@ function openOrderDetailModal(orderId) {
   const o = state.orders.find(o => o.id === orderId);
   if (!o) return;
   const [cls, label] = statusMeta(o.status);
+  const product = state.products.find(p => p.id === o.productId);
   openModal(`
     <h3>Commande #${o.orderNumber}</h3>
     <div class="modal-sub">${connectorLabel(o.channelType)} · ${fmtDateTime(o.date)}</div>
     <div class="detail-grid">
       <div class="item"><div class="k">Cliente</div><div class="v">${escapeHTML(o.customer)}</div></div>
+      <div class="item"><div class="k">Produit</div><div class="v">${product ? escapeHTML(product.name) : '<span style="color:var(--ink-faint)">Non lié à un produit</span>'}</div></div>
       <div class="item"><div class="k">Montant</div><div class="v">${fmtEUR(o.amount)}</div></div>
       <div class="item"><div class="k">Canal</div><div class="v"><span class="chan-dot"><span class="sw" style="background:${channelColor(o.channelType)}"></span>${connectorLabel(o.channelType)}</span></div></div>
       <div class="item"><div class="k">Statut</div><div class="v"><span class="status-chip ${cls}"><span class="dot"></span>${label}</span></div></div>
