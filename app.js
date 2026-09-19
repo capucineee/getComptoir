@@ -1180,6 +1180,7 @@ function closeModal() { document.getElementById('modalRoot').innerHTML = ''; }
 const ROUTES = [
   { path: '', label: "Vue d'ensemble", icon: 'M2 9h3v5H2zM6.5 5h3v9h-3zM11 2h3v12h-3z' },
   { path: 'ventes', label: 'Ventes', icon: null },
+  { path: 'trafic', label: 'Trafic', icon: null },
   { path: 'stock', label: 'Stock', icon: null },
   { path: 'catalogue', label: 'Mon catalogue', icon: null },
   { path: 'sav', label: 'SAV', icon: null },
@@ -1661,7 +1662,7 @@ async function loadTracking(force = false) {
     const changed = JSON.stringify(fresh) !== JSON.stringify(trackingStats);
     trackingStats = fresh;
     const path = currentPath();
-    if (changed && (path === '' || path === 'connecteurs') && !document.getElementById('modalRoot').innerHTML.trim()) render();
+    if (changed && (path === '' || path === 'connecteurs' || path === 'trafic') && !document.getElementById('modalRoot').innerHTML.trim()) render();
   } catch (e) { /* stats are a bonus — never surface an error for them */ }
   finally { trackingInflight = false; }
 }
@@ -1675,13 +1676,30 @@ function trackingStatus(c) {
   if (days >= 3) return { level: 'warning', label: 'Inactif', reason: `Aucune visite reçue depuis ${days} jours : le script a peut-être été retiré du site.` };
   return { level: 'good', label: 'Suivi actif', reason: `${fmtNum(site.visitors)} visiteur${site.visitors !== 1 ? 's' : ''} sur la période.` };
 }
-function trafficSection(bounds) {
+function pageTrafic() {
+  const bounds = getRangeBounds();
   const st = trackingStats;
   const capable = state.connectors.filter(c => TRACKABLE.includes(c.type));
+  const todayISO = new Date().toISOString().slice(0, 10);
+  const fallbackFrom = daysAgo(29).toISOString().slice(0, 10);
+  const custom = state.rangeCustom || {};
+  const visitors = st ? st.visitors : 0, views = st ? st.views : 0;
   const activeSites = st ? st.sites.filter(x => x.visitors > 0) : [];
   const trackedTypes = new Set(activeSites.map(x => x.channelType));
   const sales = ordersInRange(bounds).filter(o => o.status !== 'retour' && trackedTypes.has(o.channelType)).length;
-  const conv = st && st.visitors ? (sales / st.visitors) * 100 : 0;
+  const conv = visitors ? (sales / visitors) * 100 : 0;
+  const ppv = visitors ? views / visitors : 0;
+
+  // Daily series across the whole range (missing days = 0) so the curve shows real gaps.
+  const perDay = {};
+  (st ? st.daily : []).forEach(d => { perDay[d.day] = d.visitors; });
+  const series = [];
+  for (let d = new Date(bounds.from.getFullYear(), bounds.from.getMonth(), bounds.from.getDate()); d <= bounds.to && series.length < 400; d.setDate(d.getDate() + 1)) {
+    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    series.push({ t: d.getTime(), count: perDay[key] || 0 });
+  }
+  const chart = trendChartSVG(series, 'day', 'vis', 'count');
+
   const coverage = state.connectors.length ? state.connectors.map(c => {
     const t = trackingStatus(c);
     return `<div class="alert-row" style="align-items:flex-start;">
@@ -1689,32 +1707,89 @@ function trafficSection(bounds) {
       <span class="status-chip ${t.level}"><span class="dot"></span>${t.label}</span>
     </div>`;
   }).join('') : `<div class="empty">Aucune plateforme connectée.</div>`;
-  const spark = st && st.daily.length > 1 ? sparkline(st.daily.map(d => d.visitors), 'var(--brand)') : '';
-  const stat = (label, value) => `<div style="flex:1; min-width:110px;"><div class="card-sub" style="margin-bottom:2px;">${label}</div><div style="font-family:var(--font-mono); font-size:22px; font-weight:600;">${value}</div></div>`;
-  const visitorsCard = st && st.visitors > 0 ? `
-      <div style="display:flex; gap:18px; flex-wrap:wrap; margin:6px 0 4px;">
-        ${stat('Visiteurs', fmtNum(st.visitors))}
-        ${stat('Pages vues', fmtNum(st.views))}
-        ${stat('Taux de conversion', `${conv.toFixed(1)}%`)}
-      </div>
-      <div class="kpi-spark-wrap" style="max-width:340px;">${spark}</div>
-      <div class="card-sub" style="margin-top:10px;">Conversion = ${fmtNum(sales)} vente${sales !== 1 ? 's' : ''} ÷ ${fmtNum(st.visitors)} visiteur${st.visitors !== 1 ? 's' : ''}, sur les sites suivis uniquement.</div>`
-    : `<div class="empty">${!capable.length
-        ? "Le suivi des visiteurs fonctionne pour les sites où vous pouvez ajouter un script : Shopify, WooCommerce ou site personnalisé. Connectez-en un dans Connecteurs."
-        : `Aucune visite reçue sur cette période. <a href="#connecteurs" style="color:var(--brand)">Installer le suivi →</a>`}</div>`;
+
+  const sparkFor = key => st && st.daily.length > 1 ? sparkline(series.map(x => x.count), 'var(--brand)') : '';
+  const sp = sparkFor();
   const total = st ? st.sources.reduce((a, r) => a + r.visitors, 0) || 1 : 1;
   const totalC = st ? st.countries.reduce((a, r) => a + r.visitors, 0) || 1 : 1;
   const bars = (rows, tot, labelFn) => rows.map(r => `
     <div class="chan-row"><div class="top"><span>${labelFn(r)}</span><span class="pct">${Math.round(r.visitors / tot * 100)}%</span></div>
     <div class="chan-bar"><div style="width:${r.visitors / tot * 100}%; background:var(--brand)"></div></div></div>`).join('');
+
+  const perSite = state.connectors.filter(c => TRACKABLE.includes(c.type)).map(c => {
+    const site = st ? st.sites.find(x => x.connectorId === c.id) : null;
+    const t = trackingStatus(c);
+    const sameType = state.connectors.filter(x => x.type === c.type).length === 1;
+    const s2 = sameType && site ? ordersInRange(bounds).filter(o => o.status !== 'retour' && o.channelType === c.type).length : null;
+    const cv = site && site.visitors && s2 != null ? `${((s2 / site.visitors) * 100).toFixed(1)}%` : '—';
+    return `<tr>
+      <td>${escapeHTML(c.label)}</td>
+      <td><span class="status-chip ${t.level}"><span class="dot"></span>${t.label}</span></td>
+      <td class="amount">${site ? fmtNum(site.visitors) : '—'}</td>
+      <td class="amount">${site ? fmtNum(site.views) : '—'}</td>
+      <td class="amount">${s2 != null ? fmtNum(s2) : '—'}</td>
+      <td class="amount">${cv}</td>
+      <td><button class="btn sm" data-action="openTracking" data-id="${c.id}">${site ? 'Script' : 'Installer'}</button></td>
+    </tr>`;
+  }).join('');
+
   return `
-    <div class="section-head"><h2>Trafic</h2><span>Qui visite vos sites, et combien achètent</span></div>
+    <div class="topbar">
+      <div><h1>Trafic</h1><div class="sub">Qui visite vos sites, et combien achètent</div></div>
+      <div class="topbar-actions">
+        <div class="range">
+          ${['7', '30', '90'].map(d => `<button data-action="setRange" data-range="${d}" class="${state.range === d ? 'active' : ''}">${d} j</button>`).join('')}
+          <button data-action="setRange" data-range="custom" class="${state.range === 'custom' ? 'active' : ''}">Personnalisé</button>
+        </div>
+        ${state.range === 'custom' ? `
+        <div style="display:flex; align-items:center; gap:6px;">
+          <input type="date" id="rangeFromInput" class="stock-input" style="width:auto;" value="${custom.from || fallbackFrom}" max="${todayISO}">
+          <span style="color:var(--ink-faint); font-size:12.5px;">→</span>
+          <input type="date" id="rangeToInput" class="stock-input" style="width:auto;" value="${custom.to || todayISO}" max="${todayISO}">
+        </div>` : ''}
+        <span class="sync-indicator" title="Les visites se mettent à jour automatiquement"><span class="sync-dot"></span><span id="syncIndicatorText">${syncLabel()}</span></span>
+        ${themeToggleHTML()}
+      </div>
+    </div>
+    <div class="overview-page">
+    <div class="kpis">
+      ${kpiCard('visitors', 'Visiteurs', visitors, 'num', fmtNum(visitors), '', sp,
+        `Chaque visiteur est compté une fois par jour (sans cookie, sans l'identifier). Le total additionne les visiteurs de chaque jour de la période (${rangeLabel(bounds)}) : <b>${fmtNum(visitors)}</b>.`)}
+      ${kpiCard('views', 'Pages vues', views, 'num', fmtNum(views), '', '',
+        `Nombre total de pages affichées sur vos sites suivis pendant la période, un visiteur pouvant en voir plusieurs : <b>${fmtNum(views)}</b>.`)}
+      ${kpiCard('ppv', 'Pages par visite', ppv, 'dec', ppv.toFixed(1).replace('.', ','), '', '',
+        `Pages vues ÷ visiteurs : ${fmtNum(views)} ÷ ${fmtNum(visitors)} = <b>${ppv.toFixed(1).replace('.', ',')}</b>. Plus c'est élevé, plus vos visiteurs explorent.`)}
+      ${kpiCard('conv', 'Taux de conversion', conv, 'pct', `${conv.toFixed(1)}%`, '', '',
+        `Ventes (retours exclus) ÷ visiteurs, uniquement pour les sites où le suivi est actif : ${fmtNum(sales)} ÷ ${fmtNum(visitors)} = <b>${conv.toFixed(1)}%</b>.`)}
+    </div>
+
+    ${visitors > 0 || activeSites.length ? '' : `<div class="card" style="margin-bottom:14px;"><div class="empty">${!capable.length
+      ? "Le suivi des visiteurs fonctionne pour les sites où vous pouvez ajouter un script : Shopify, WooCommerce ou site personnalisé. Connectez-en un dans <a href=\"#connecteurs\" style=\"color:var(--brand)\">Connecteurs</a>."
+      : `Aucune visite reçue sur cette période. Installez le script de suivi sur votre site depuis le tableau « Par site » ci-dessous.`}</div></div>`}
+
+    <div class="card" style="margin-bottom:14px;">
+      <h2>Visiteurs par jour — ${rangeLabel(bounds)}</h2>
+      <div class="card-sub">Tous sites suivis confondus</div>
+      <div class="chart-wrap" id="visWrap">${chart.svg}<div class="tooltip" id="visTooltip"></div></div>
+    </div>
+
+    <div class="grid">
+      <div class="card"><h2>D'où viennent-ils ? ${howBtn('sources')}</h2>
+        ${howBox('sources', "Source = site d'où arrive le visiteur (Google, Instagram…), ou le paramètre utm_source d'un lien de campagne (newsletter…). « Direct » = adresse tapée, favori, ou origine inconnue. Un visiteur est classé selon sa première visite du jour.")}
+        <div class="card-sub">Part des visiteurs par source</div>
+        ${st && st.sources.length ? bars(st.sources, total, r => escapeHTML(r.source)) : '<div class="empty">Pas encore de données.</div>'}</div>
+      <div class="card"><h2>Pays des visiteurs ${howBtn('paysvis')}</h2>
+        ${howBox('paysvis', "Le pays est déduit du réseau du visiteur lorsque l'hébergeur le fournit, sinon de son fuseau horaire : c'est approximatif (un VPN ou un voyage peut fausser).")}
+        <div class="card-sub">Part des visiteurs (approximatif)</div>
+        ${st && st.countries.length ? bars(st.countries, totalC, r => r.country ? `${flagEmoji(r.country)} ${escapeHTML(countryName(r.country))}` : '<span style="color:var(--ink-faint)">Pays inconnu</span>') : '<div class="empty">Pas encore de données.</div>'}</div>
+    </div>
+
+    <div class="section-head"><h2>Par site</h2><span>Visiteurs, ventes et conversion de chaque connecteur</span></div>
     <div class="grid">
       <div class="card">
-        <h2>Visiteurs ${howBtn('visiteurs')}</h2>
-        ${howBox('visiteurs', "Un script sans cookie placé sur votre site compte chaque visiteur une fois par jour (sans le identifier ni le suivre d'un jour à l'autre). Le total additionne les visiteurs de chaque jour. La conversion divise vos ventes (retours exclus) par ces visiteurs, uniquement pour les sites où le suivi est actif. Le pays est déduit du réseau ou du fuseau horaire du visiteur : approximatif.")}
-        <div class="card-sub">${rangeLabel(bounds)}</div>
-        ${visitorsCard}
+        <h2>Sites suivis ${howBtn('parsite')}</h2>
+        ${howBox('parsite', "Conversion d'un site = ses ventes (retours exclus) ÷ ses visiteurs. Elle n'est affichée que si ce type de plateforme n'est connecté qu'une seule fois, sinon les ventes ne peuvent pas être attribuées avec certitude à un site précis.")}
+        ${perSite ? `<div class="table-scroll"><table class="data"><thead><tr><th>Site</th><th>Statut</th><th style="text-align:right">Visiteurs</th><th style="text-align:right">Pages vues</th><th style="text-align:right">Ventes</th><th style="text-align:right">Conversion</th><th></th></tr></thead><tbody>${perSite}</tbody></table></div>` : `<div class="empty">Aucun site suivi possible : connectez Shopify, WooCommerce ou un site personnalisé.</div>`}
       </div>
       <div class="card">
         <h2>Couverture du suivi ${howBtn('couverture')}</h2>
@@ -1723,11 +1798,7 @@ function trafficSection(bounds) {
         ${coverage}
       </div>
     </div>
-    ${st && st.visitors > 0 ? `
-    <div class="grid">
-      <div class="card"><h2>D'où viennent-ils ?</h2><div class="card-sub">Part des visiteurs par source</div>${bars(st.sources, total, r => escapeHTML(r.source))}</div>
-      <div class="card"><h2>Pays des visiteurs</h2><div class="card-sub">Part des visiteurs (approximatif)</div>${bars(st.countries, totalC, r => r.country ? `${flagEmoji(r.country)} ${escapeHTML(countryName(r.country))}` : '<span style="color:var(--ink-faint)">Pays inconnu</span>')}</div>
-    </div>` : ''}
+    </div>
   `;
 }
 async function openTrackingModal(connectorId) {
@@ -1833,8 +1904,6 @@ function pageOverview() {
         ${!acc.expenses.length ? `<div class="card-sub" style="margin-top:12px;">Ajoutez vos charges dans <a href="#comptabilite" style="color:var(--brand)">Comptabilité</a> pour un bénéfice réaliste.</div>` : `<div class="card-sub" style="margin-top:12px;"><a href="#comptabilite" style="color:var(--brand)">Voir le détail en Comptabilité →</a></div>`}`;
       })()}
     </div>
-
-    ${trafficSection(bounds)}
 
     <div class="section-head"><h2>À traiter</h2><span>Dernières commandes et stocks à surveiller</span></div>
     <div class="grid">
@@ -1955,6 +2024,7 @@ function prefersReducedMotion() { return window.matchMedia('(prefers-reduced-mot
 function formatKPIValue(format, v) {
   if (format === 'eur') return fmtEUR(v);
   if (format === 'pct') return `${v.toFixed(1)}%`;
+  if (format === 'dec') return v.toFixed(1).replace('.', ',');
   return fmtNum(Math.round(v));
 }
 // Tweens each KPI's displayed number from its last-shown value (0 on first render) up to
@@ -2737,6 +2807,7 @@ function renderNav() {
   const iconPaths = {
     '': '<path d="M2 9h3v5H2zM6.5 5h3v9h-3zM11 2h3v12h-3z"/>',
     'ventes': '<circle cx="5" cy="13" r="1.4"/><circle cx="12" cy="13" r="1.4"/><path d="M1 1h2l1.6 8.2a1.5 1.5 0 0 0 1.48 1.3h6.1a1.5 1.5 0 0 0 1.46-1.16L15 4H3.6" fill="none" stroke="currentColor" stroke-width="1.3"/>',
+    'trafic': '<circle cx="8" cy="5.5" r="2.6" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M2.5 14c0-3 2.4-4.6 5.5-4.6s5.5 1.6 5.5 4.6" fill="none" stroke="currentColor" stroke-width="1.3"/>',
     'stock': '<path d="M2 4l6-3 6 3v8l-6 3-6-3z" fill="none" stroke="currentColor" stroke-width="1.3"/>',
     'catalogue': '<path d="M8.5 2H3a1 1 0 0 0-1 1v5.5a1 1 0 0 0 .3.7l6 6a1 1 0 0 0 1.4 0l4.5-4.5a1 1 0 0 0 0-1.4l-6-6a1 1 0 0 0-.7-.3z" fill="none" stroke="currentColor" stroke-width="1.3"/><circle cx="5" cy="5" r="1" fill="currentColor"/>',
     'sav': '<path d="M2 3h12v8H5l-3 3z" fill="none" stroke="currentColor" stroke-width="1.3"/>',
@@ -2768,8 +2839,8 @@ function render() {
   renderNav();
   const main = document.getElementById('main');
   const path = currentPath();
-  if (path === 'connecteurs') loadTracking();
-  const pages = { '': pageOverview, 'ventes': pageVentes, 'stock': pageStock, 'catalogue': pageCatalogue, 'sav': pageSAV, 'connecteurs': pageConnecteurs, 'facturation': pageFacturation, 'comptabilite': pageComptabilite, 'parametres': pageParametres };
+  if (path === 'connecteurs' || path === 'trafic') loadTracking();
+  const pages = { '': pageOverview, 'ventes': pageVentes, 'trafic': pageTrafic, 'stock': pageStock, 'catalogue': pageCatalogue, 'sav': pageSAV, 'connecteurs': pageConnecteurs, 'facturation': pageFacturation, 'comptabilite': pageComptabilite, 'parametres': pageParametres };
   main.innerHTML = (state.emailVerified === false ? verifyEmailBannerHTML() : '') + (pages[path] || pageOverview)();
   if (path === '') {
     const bounds = getRangeBounds();
@@ -2777,10 +2848,28 @@ function render() {
     const series = trendSeries(bounds, granularity);
     wireTrendChart(trendChartSVG(series, granularity, 'ca', 'ca').coords, granularity, 'ca', fmtEUR);
     wireTrendChart(trendChartSVG(series, granularity, 'cnt', 'count').coords, granularity, 'cnt', v => `${fmtNum(v)} vente${v !== 1 ? 's' : ''}`);
-    loadTracking();
     animateKPIs();
     animateChartDrawIn(document.getElementById('caSvg'));
     animateChartDrawIn(document.getElementById('cntSvg'));
+    main.querySelectorAll('.kpi .spark').forEach(animateChartDrawIn);
+    if (!prefersReducedMotion()) {
+      main.querySelectorAll('.overview-page .kpi, .overview-page .card').forEach((el, i) => {
+        el.style.animationDelay = `${Math.min(i * 45, 380)}ms`;
+      });
+    }
+  }
+  if (path === 'trafic') {
+    const bounds = getRangeBounds();
+    const series = [];
+    const perDay = {};
+    (trackingStats ? trackingStats.daily : []).forEach(d => { perDay[d.day] = d.visitors; });
+    for (let d = new Date(bounds.from.getFullYear(), bounds.from.getMonth(), bounds.from.getDate()); d <= bounds.to && series.length < 400; d.setDate(d.getDate() + 1)) {
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+      series.push({ t: d.getTime(), count: perDay[key] || 0 });
+    }
+    wireTrendChart(trendChartSVG(series, 'day', 'vis', 'count').coords, 'day', 'vis', v => `${fmtNum(v)} visiteur${v !== 1 ? 's' : ''}`);
+    animateKPIs();
+    animateChartDrawIn(document.getElementById('visSvg'));
     main.querySelectorAll('.kpi .spark').forEach(animateChartDrawIn);
     if (!prefersReducedMotion()) {
       main.querySelectorAll('.overview-page .kpi, .overview-page .card').forEach((el, i) => {
