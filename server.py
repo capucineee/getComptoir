@@ -1395,6 +1395,11 @@ def _ingest_order_core(conn, user_id: str, channel_type: str, connector_id: str,
                         _adjust_stock(existing["productId"], quantity, status)
 
                 if existing.get("status") != status:
+                    history = existing.setdefault("history", [])
+                    if not history and existing.get("status"):
+                        history.append({"status": existing["status"], "at": existing.get("date") or now_iso})
+                    history.append({"status": status, "at": now_iso})
+                    del history[:-50]
                     existing["status"] = status
                     changed = True
                 if existing.get("quantity") != quantity:
@@ -1467,6 +1472,7 @@ def _ingest_order_core(conn, user_id: str, channel_type: str, connector_id: str,
             "custom": _extract_extra_fields(body) if isinstance(body, dict) else {},
             "externalId": external_id,
             "country": country,
+            "history": [{"status": status, "at": now_iso}],
             "updatedAt": now_iso,
         }
         orders.insert(0, order)

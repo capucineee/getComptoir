@@ -2802,7 +2802,18 @@ function openOrderDetailModal(orderId) {
       <div style="font-size:12.5px; color:var(--ink-faint); margin-bottom:10px;">Données reçues du site</div>
       <div class="detail-grid">${receivedData.map(([k, v]) => `<div class="item"><div class="k">${escapeHTML(k)}</div><div class="v">${escapeHTML(v)}</div></div>`).join('')}</div>
     </div>` : ''}
-    ${o.updatedAt ? `<div class="card-sub" style="margin-bottom:14px;">Dernière mise à jour : ${fmtDateTime(o.updatedAt)}</div>` : ''}
+    <div style="border-top:1px solid var(--rule-soft); padding-top:14px; margin-bottom:14px;">
+      <div style="font-size:12.5px; color:var(--ink-faint); margin-bottom:10px;">Historique du statut</div>
+      ${(() => {
+        const hist = (o.history && o.history.length) ? o.history : [{ status: o.status, at: o.date }];
+        const t = at => String(at).length <= 10 ? fmtDate(at) : fmtDateTime(at);
+        return `<div class="timeline">${hist.map((h, i) => {
+          const [hc, hl] = statusMeta(h.status) || ['warning', h.status];
+          const first = i === 0;
+          return `<div class="tl-row"><span class="tl-dot ${hc}"></span><div><div class="tl-title"><span class="status-chip ${hc}"><span class="dot"></span>${hl}</span>${h.source === 'manual' ? '<span class="tl-src">modifié à la main</span>' : ''}</div><div class="tl-date">${first ? 'Commande enregistrée · ' : ''}${t(h.at)}</div></div></div>`;
+        }).join('')}</div>${hist.length === 1 ? '<div class="card-sub" style="margin-top:6px;">Aucun changement de statut depuis la réception de la commande.</div>' : ''}`;
+      })()}
+    </div>
     <div style="border-top:1px solid var(--rule-soft); padding-top:14px;">
       <div style="font-size:12.5px; color:var(--ink-faint); margin-bottom:12px;">Champs de suivi</div>
       ${state.customFields.length ? state.customFields.map(f => {
@@ -2941,6 +2952,9 @@ document.addEventListener('click', e => {
           product.stock = Math.max(0, (product.stock || 0) - oldDelta + newDelta);
           product.updatedAt = new Date().toISOString();
         }
+        if (!o.history || !o.history.length) o.history = [{ status: o.status, at: o.date }];
+        o.history.push({ status: statusSelect.value, at: new Date().toISOString(), source: 'manual' });
+        o.history = o.history.slice(-50);
         o.status = statusSelect.value;
       }
       // Stamped on every save (even one that only touched a custom field) — the server
