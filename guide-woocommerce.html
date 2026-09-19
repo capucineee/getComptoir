@@ -138,10 +138,39 @@
 
   <p class="section-sub" style="margin-top:16px;">Le stock de vos produits dans Comptoir est ajusté automatiquement à chaque changement : une commande terminée le fait baisser, un remboursement le fait remonter.</p>
 
+  <p class="section-sub">Le <b>pays</b> de facturation/livraison de chaque commande est repris automatiquement (drapeau dans <b>Ventes</b>), et chaque changement de statut est daté dans l'historique de la commande.</p>
+
   <h2><span class="n">02</span>Votre forfait</h2>
   <p class="section-sub">Connecter WooCommerce compte comme un canal de vente sur votre forfait. Le nombre de commandes reçues via WooCommerce compte dans votre quota mensuel de commandes.</p>
 
-  <h2><span class="n">03</span>Se déconnecter</h2>
+  <h2><span class="n">03</span>Suivre les visiteurs de votre site</h2>
+  <p class="section-sub">Comptoir peut compter les visiteurs de votre site et calculer votre taux de conversion (ventes ÷ visiteurs), avec leurs sources et leurs pays. Il suffit d'ajouter un petit script, une seule fois.</p>
+
+  <div class="code-label">1. Récupérer votre script</div>
+  <p class="section-sub">Dans Comptoir : <b>Connecteurs</b> → sur la carte de ce connecteur, bouton <b>Installer le suivi</b> → <b>Copier</b>. Le script contient votre clé de site, propre à ce connecteur.</p>
+  <pre>&lt;script defer src="https://getcomptoir.fr/t.js" data-site="VOTRE_CLE_SITE"&gt;&lt;/script&gt;</pre>
+
+  <div class="code-label">2. Le coller sur votre site</div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Où</th><th>Comment</th></tr></thead>
+      <tbody>
+        <tr><td>Avec une extension (le plus simple)</td><td>WordPress → <b>Extensions</b> → ajoutez « Insert Headers and Footers » (ou équivalent) → collez le script dans la zone <b>En-tête / Header</b></td></tr>
+        <tr><td>Dans le thème</td><td><b>Apparence</b> → <b>Éditeur de fichiers du thème</b> → <code>header.php</code> → collez le script juste <b>avant <code>&lt;/head&gt;</code></b> (idéalement dans un thème enfant, pour ne pas le perdre à la mise à jour)</td></tr>
+        <tr><td>Cache</td><td>Si vous utilisez une extension de cache, videz-le après l'ajout pour que le script soit servi sur toutes les pages</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="code-label">3. Vérifier</div>
+  <p class="section-sub">Visitez votre site, puis regardez la carte du connecteur dans <b>Connecteurs</b> : le statut passe de <b>Non installé</b> / <b>En attente</b> à <b>Suivi actif</b> en moins d'une minute. Les chiffres apparaissent dans la <b>Vue d'ensemble</b>, section <b>Trafic</b>.</p>
+
+  <div class="callout">
+    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="10" cy="10" r="8.2"/><path d="M10 6.5v4M10 13.2v.1"/></svg>
+    <div><b>Respect de la vie privée.</b> Le script n'utilise aucun cookie et ne conserve aucune donnée personnelle : un visiteur est reconnu par un code jetable valable un seul jour, puis effacé. Seuls des totaux par jour (visiteurs, pages vues, source, pays) sont gardés. Le signal « Do Not Track » du navigateur est respecté et les robots sont ignorés. Le pays est approximatif.</div>
+  </div>
+
+  <h2><span class="n">04</span>Se déconnecter</h2>
   <div class="table-wrap">
     <table>
       <thead><tr><th>Depuis</th><th>Effet</th></tr></thead>

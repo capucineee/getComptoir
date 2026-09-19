@@ -165,8 +165,10 @@
         <tr><td><code>amount</code></td><td><span class="req">requis</span></td><td>total, montant, price, totalPrice, grandTotal — tolère virgule décimale et symbole €</td></tr>
         <tr><td><code>status</code></td><td><span class="opt">optionnel</span></td><td>statut, state, orderStatus — voir statuts ci-dessous ; à défaut, déduit de signaux comme <code>shipped_at</code>, <code>cancelled_at</code>, <code>fulfillment_status</code></td></tr>
         <tr><td><code>externalId</code></td><td><span class="opt">recommandé</span></td><td>orderId, order_id, reference, ref, orderNumber</td></tr>
-        <tr><td><code>date</code></td><td><span class="opt">optionnel</span></td><td>created_at, createdAt, order_date — format ISO 8601, défaut : maintenant</td></tr>
+        <tr><td><code>date</code></td><td><span class="opt">recommandé</span></td><td>created_at, createdAt, order_date — <b>date et heure réelles de la vente</b>, format ISO 8601 (ex. <code>2026-09-18T16:42:00Z</code>) ; défaut : maintenant. Les ventes sont classées par cette date.</td></tr>
         <tr><td><code>customerName</code></td><td><span class="opt">optionnel</span></td><td>client, clientName, nom_client, ou objet <code>customer: {name}</code></td></tr>
+        <tr><td><code>country</code></td><td><span class="opt">recommandé</span></td><td>countryCode, country_code, pays — code à 2 lettres (<code>FR</code>) ou nom courant (<code>France</code>), ou dans <code>shipping_address</code> / <code>billing</code> — affiché en drapeau dans Ventes et utilisé pour « Ventes par pays »</td></tr>
+        <tr><td><code>quantity</code></td><td><span class="opt">optionnel</span></td><td>qty, quantite — sert au calcul du stock et du coût d'achat (défaut : 1)</td></tr>
         <tr><td><code>productName</code></td><td><span class="opt">optionnel</span></td><td>product, article, item, ou premier élément d'un tableau <code>items</code>/<code>products</code></td></tr>
       </tbody>
     </table>
@@ -228,6 +230,54 @@
   <div class="callout">
     <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="10" cy="10" r="8.2"/><path d="M10 6.5v4M10 13.2v.1"/></svg>
     <div>Limité à 500 commandes par appel. La réponse détaille combien ont été créées, mises à jour, laissées inchangées, ou en échec — une commande invalide dans le lot n'empêche pas les autres d'être traitées.</div>
+  </div>
+
+  <div class="callout">
+    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="10" cy="10" r="8.2"/><path d="M10 6.5v4M10 13.2v.1"/></svg>
+    <div><b>Historique des statuts.</b> Chaque fois qu'une commande déjà connue arrive avec un statut différent, Comptoir l'ajoute à sa frise (visible dans le détail de la commande) avec la date de réception du changement. <b>Premier envoi conseillé :</b> renvoyez tout l'historique une fois, avec <code>country</code> et <code>date</code>, pour compléter les commandes déjà enregistrées.</div>
+  </div>
+
+  <h2><span class="n">06</span>Suivre les visiteurs de votre site</h2>
+  <p class="section-sub">Comptoir peut compter les visiteurs de votre site et calculer votre taux de conversion (ventes ÷ visiteurs), avec leurs sources et leurs pays. Il suffit d'ajouter un petit script, une seule fois.</p>
+
+  <div class="code-label">1. Récupérer votre script</div>
+  <p class="section-sub">Dans Comptoir : <b>Connecteurs</b> → sur la carte de ce connecteur, bouton <b>Installer le suivi</b> → <b>Copier</b>. Le script contient votre clé de site, propre à ce connecteur.</p>
+  <pre>&lt;script defer src="https://getcomptoir.fr/t.js" data-site="VOTRE_CLE_SITE"&gt;&lt;/script&gt;</pre>
+
+  <div class="code-label">2. Le coller sur votre site</div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Où</th><th>Comment</th></tr></thead>
+      <tbody>
+        <tr><td>Votre site</td><td>Collez le script dans le <code>&lt;head&gt;</code> de <b>toutes</b> les pages, idéalement dans le gabarit commun (layout / header)</td></tr>
+        <tr><td>Site à navigation sans rechargement (SPA)</td><td>Le script détecte les changements de page (<code>pushState</code>) : un seul ajout dans <code>index.html</code> suffit</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="code-label">3. Vérifier</div>
+  <p class="section-sub">Visitez votre site, puis regardez la carte du connecteur dans <b>Connecteurs</b> : le statut passe de <b>Non installé</b> / <b>En attente</b> à <b>Suivi actif</b> en moins d'une minute. Les chiffres apparaissent dans la <b>Vue d'ensemble</b>, section <b>Trafic</b>.</p>
+
+  <div class="code-label">Quelles plateformes peuvent être suivies ?</div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Connecteur</th><th>Suivi des visiteurs</th><th>Pourquoi</th></tr></thead>
+      <tbody>
+        <tr><td>Site personnalisé</td><td>Oui</td><td>Vous contrôlez le code du site</td></tr>
+        <tr><td>WooCommerce</td><td>Oui</td><td>Script ajouté à l'en-tête du thème</td></tr>
+        <tr><td>Shopify</td><td>Oui</td><td>Script ajouté à <code>theme.liquid</code></td></tr>
+        <tr><td>Etsy</td><td>Non</td><td>Etsy n'autorise pas de script sur votre boutique</td></tr>
+        <tr><td>Instagram Shop</td><td>Non</td><td>Aucun script externe autorisé ; seules les statistiques Instagram existent</td></tr>
+        <tr><td>TikTok Shop</td><td>Non</td><td>Aucun script externe autorisé</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="section-sub" style="margin-top:12px;">Pour ces plateformes, Comptoir suit les ventes mais pas les visiteurs. La carte « Couverture du suivi » de la Vue d'ensemble l'indique pour chaque connecteur.</p>
+  <p class="section-sub">Votre clé de site (dans le script) est publique : elle ne permet que d'envoyer des visites. Elle est différente de la clé API des commandes, qui doit rester secrète.</p>
+
+  <div class="callout">
+    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="10" cy="10" r="8.2"/><path d="M10 6.5v4M10 13.2v.1"/></svg>
+    <div><b>Respect de la vie privée.</b> Le script n'utilise aucun cookie et ne conserve aucune donnée personnelle : un visiteur est reconnu par un code jetable valable un seul jour, puis effacé. Seuls des totaux par jour (visiteurs, pages vues, source, pays) sont gardés. Le signal « Do Not Track » du navigateur est respecté et les robots sont ignorés. Le pays est approximatif.</div>
   </div>
 
   <footer>Comptoir — Vendez partout. Comptez ici.</footer>

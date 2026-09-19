@@ -140,6 +140,8 @@
 
   <p class="section-sub" style="margin-top:16px;">Le stock de vos produits dans Comptoir est ajusté automatiquement à chaque changement : une commande expédiée le fait baisser, un remboursement le fait remonter.</p>
 
+  <p class="section-sub">Le <b>pays</b> de livraison de chaque commande est repris automatiquement (drapeau dans <b>Ventes</b>), et chaque changement de statut est daté dans l'historique de la commande.</p>
+
   <h2><span class="n">02</span>Votre forfait</h2>
   <p class="section-sub">Connecter Shopify compte comme un canal de vente sur votre forfait, au même titre qu'un connecteur personnalisé. Le nombre de commandes reçues via Shopify compte dans votre quota mensuel de commandes.</p>
 
@@ -153,7 +155,34 @@
     </table>
   </div>
 
-  <h2><span class="n">03</span>Se déconnecter</h2>
+  <h2><span class="n">03</span>Suivre les visiteurs de votre site</h2>
+  <p class="section-sub">Comptoir peut compter les visiteurs de votre site et calculer votre taux de conversion (ventes ÷ visiteurs), avec leurs sources et leurs pays. Il suffit d'ajouter un petit script, une seule fois.</p>
+
+  <div class="code-label">1. Récupérer votre script</div>
+  <p class="section-sub">Dans Comptoir : <b>Connecteurs</b> → sur la carte de ce connecteur, bouton <b>Installer le suivi</b> → <b>Copier</b>. Le script contient votre clé de site, propre à ce connecteur.</p>
+  <pre>&lt;script defer src="https://getcomptoir.fr/t.js" data-site="VOTRE_CLE_SITE"&gt;&lt;/script&gt;</pre>
+
+  <div class="code-label">2. Le coller sur votre site</div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Où</th><th>Comment</th></tr></thead>
+      <tbody>
+        <tr><td>Shopify — Admin</td><td><b>Boutique en ligne</b> → <b>Thèmes</b> → menu <b>⋯</b> du thème actif → <b>Modifier le code</b> → fichier <code>theme.liquid</code></td></tr>
+        <tr><td>Emplacement</td><td>Collez le script juste <b>avant la balise <code>&lt;/head&gt;</code></b>, puis <b>Enregistrer</b></td></tr>
+        <tr><td>Changement de thème</td><td>Le script est propre au thème : après un changement de thème, collez-le de nouveau dans le nouveau <code>theme.liquid</code></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="code-label">3. Vérifier</div>
+  <p class="section-sub">Visitez votre site, puis regardez la carte du connecteur dans <b>Connecteurs</b> : le statut passe de <b>Non installé</b> / <b>En attente</b> à <b>Suivi actif</b> en moins d'une minute. Les chiffres apparaissent dans la <b>Vue d'ensemble</b>, section <b>Trafic</b>.</p>
+
+  <div class="callout">
+    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="10" cy="10" r="8.2"/><path d="M10 6.5v4M10 13.2v.1"/></svg>
+    <div><b>Respect de la vie privée.</b> Le script n'utilise aucun cookie et ne conserve aucune donnée personnelle : un visiteur est reconnu par un code jetable valable un seul jour, puis effacé. Seuls des totaux par jour (visiteurs, pages vues, source, pays) sont gardés. Le signal « Do Not Track » du navigateur est respecté et les robots sont ignorés. Le pays est approximatif.</div>
+  </div>
+
+  <h2><span class="n">04</span>Se déconnecter</h2>
   <p class="section-sub">Deux façons, au choix :</p>
   <div class="table-wrap">
     <table>
