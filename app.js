@@ -1876,7 +1876,7 @@ function pageVentes() {
       </div>
       ${list.length ? `<div class="table-scroll"><table class="data">
         <thead><tr>
-          <th>Commande</th><th>Canal</th><th>Cliente</th><th>Produit</th><th>Date</th><th style="text-align:right">Montant</th><th>Statut</th>
+          <th>Commande</th><th>Canal</th><th>Cliente</th><th>Pays</th><th>Produit</th><th>Date</th><th style="text-align:right">Montant</th><th>Statut</th>
           ${state.customFields.map(f => `<th>${f.label}<span class="field-remove" data-action="removeField" data-id="${f.id}" title="Retirer ce champ">×</span><span class="field-source">${fieldSourceLabel(f)}</span></th>`).join('')}
           <th><button class="btn sm" data-action="openAddField">+ Champ</button></th>
         </tr></thead>
@@ -1892,7 +1892,8 @@ function ventesOrderRow(o) {
   return `<tr data-action="openOrderDetail" data-id="${o.id}" class="row-click" role="button" tabindex="0">
     <td>${orderDisplayRef(o)}</td>
     <td><span class="chan-dot"><span class="sw" style="background:${channelColor(o.channelType)}"></span>${connectorLabel(o.channelType)}</span></td>
-    <td>${flagHTML(o)}${escapeHTML(o.customer)}</td>
+    <td>${escapeHTML(o.customer)}</td>
+    <td style="white-space:nowrap">${o.country ? `${flagEmoji(o.country)} <span style="color:var(--ink-faint);font-size:12px" title="${escapeHTML(countryName(o.country))}">${escapeHTML(o.country.toUpperCase())}</span>` : '<span style="color:var(--ink-faint)" title="Pays non transmis par le site">—</span>'}</td>
     <td>${product ? escapeHTML(product.name) : '<span style="color:var(--ink-faint)">—</span>'}</td>
     <td style="white-space:nowrap">${String(o.date).length <= 10 ? fmtDate(o.date) : fmtDateTime(o.date)}</td>
     <td class="amount">${fmtEUR(o.amount)}</td>
