@@ -1306,6 +1306,21 @@ function channelBreakdown(bounds) {
     .map(([type, amount]) => ({ type, amount, pct: Math.round((amount / total) * 100) }))
     .sort((a, b) => b.amount - a.amount);
 }
+// Share of sales (order count, returns excluded — a returned order isn't a sale) per
+// country. Orders whose site never sent a country are grouped under null, so the card
+// stays honest about how much of the picture is actually known.
+function countryBreakdown(bounds) {
+  const cur = ordersInRange(bounds).filter(o => o.status !== 'retour');
+  const byCountry = {};
+  cur.forEach(o => {
+    const key = o.country ? o.country.toUpperCase() : null;
+    const r = byCountry[key] || (byCountry[key] = { code: key, count: 0, amount: 0 });
+    r.count += 1; r.amount += o.amount;
+  });
+  return Object.values(byCountry)
+    .map(r => ({ ...r, pct: (r.count / cur.length) * 100 }))
+    .sort((a, b) => (a.code === null) - (b.code === null) || b.count - a.count);
+}
 // Ranked by quantity sold, not revenue — that's what "best-seller" means for restocking
 // decisions, and it's what Stock already tracks against. A returned order never sold
 // anything in the end, so it's excluded rather than counted as a real sale.
@@ -1613,6 +1628,7 @@ function pageOverview() {
   const cntChart = trendChartSVG(series, granularity, 'cnt', 'count');
   const breakdown = channelBreakdown(bounds);
   const bestSellers = topProducts(bounds);
+  const countries = countryBreakdown(bounds);
   const habits = computeSalesHabits();
   const alerts = stockAlerts();
   const recent = byDateDesc(state.orders).slice(0, 6);
@@ -1690,6 +1706,21 @@ function pageOverview() {
             <div class="chan-bar"><div style="width:${b.pct}%; background:${channelColor(b.type)}"></div></div>
           </div>`).join('') : `<div class="empty">Aucune vente sur cette période.</div>`}
       </div>
+    </div>
+
+    <div class="card" style="margin-bottom:14px;">
+      <h2>Ventes par pays</h2>
+      <div class="card-sub">${rangeLabel(bounds)} · part du nombre de ventes (retours exclus)</div>
+      ${countries.length ? countries.map(c => {
+        const pctTxt = c.pct > 0 && c.pct < 1 ? '<1%' : `${Math.round(c.pct)}%`;
+        const label = c.code ? `${flagEmoji(c.code)} ${escapeHTML(countryName(c.code))}` : '<span style="color:var(--ink-faint)">Pays non renseigné</span>';
+        return `
+        <div class="chan-row">
+          <div class="top"><span>${label} <span style="color:var(--ink-faint);font-size:12px">· ${fmtNum(c.count)} vente${c.count !== 1 ? 's' : ''} · ${fmtEUR(c.amount)}</span></span><span class="pct">${pctTxt}</span></div>
+          <div class="chan-bar"><div style="width:${c.pct}%; background:${c.code ? 'var(--brand)' : 'var(--ink-faint)'}"></div></div>
+        </div>`;
+      }).join('') : `<div class="empty">Aucune vente sur cette période.</div>`}
+      ${countries.length && countries.every(c => c.code === null) ? `<div class="card-sub" style="margin-top:10px;">Aucun pays reçu pour l'instant — le site doit envoyer un champ <code>country</code> avec ses commandes.</div>` : ''}
     </div>
 
     <div class="card" style="margin-bottom:14px;">
