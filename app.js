@@ -2766,14 +2766,27 @@ function openOrderDetailModal(orderId) {
   if (!o) return;
   const [cls, label] = statusMeta(o.status);
   const product = state.products.find(p => p.id === o.productId);
+  const qty = o.quantity || 1;
+  const fullDate = String(o.date).length <= 10
+    ? new Date(o.date).toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })
+    : new Date(o.date).toLocaleString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+  const sameCustomer = state.orders.filter(x => x.customer === o.customer && x.customer !== 'Client');
+  const customerTotal = sameCustomer.filter(x => x.status !== 'retour').reduce((sum, x) => sum + x.amount, 0);
+  const trackedIds = new Set(state.customFields.map(f => f.id));
+  const receivedData = Object.entries(o.custom || {}).filter(([k, v]) => !trackedIds.has(k) && v !== '' && v != null);
+  const dash = '<span style="color:var(--ink-faint)">—</span>';
   openModal(`
     <h3>Commande ${orderDisplayRef(o)}</h3>
-    <div class="modal-sub">${connectorLabel(o.channelType)} · ${fmtDateTime(o.date)}</div>
+    <div class="modal-sub">${connectorLabel(o.channelType)} · ${fullDate}</div>
     <div class="detail-grid">
-      <div class="item"><div class="k">Cliente</div><div class="v">${flagHTML(o)}${escapeHTML(o.customer)}</div></div>
+      <div class="item"><div class="k">Cliente</div><div class="v">${escapeHTML(o.customer)}</div></div>
+      <div class="item"><div class="k">Pays</div><div class="v">${o.country ? `${flagEmoji(o.country)} ${escapeHTML(countryName(o.country))}` : dash}</div></div>
       <div class="item"><div class="k">Produit</div><div class="v">${product ? escapeHTML(product.name) : '<span style="color:var(--ink-faint)">Non lié à un produit</span>'}</div></div>
+      <div class="item"><div class="k">Quantité</div><div class="v">${fmtNum(qty)}</div></div>
       <div class="item"><div class="k">Montant</div><div class="v">${fmtEUR(o.amount)}</div></div>
+      <div class="item"><div class="k">Prix unitaire</div><div class="v">${fmtEUR(o.amount / qty)}</div></div>
       <div class="item"><div class="k">Canal</div><div class="v"><span class="chan-dot"><span class="sw" style="background:${channelColor(o.channelType)}"></span>${connectorLabel(o.channelType)}</span></div></div>
+      <div class="item"><div class="k">Référence</div><div class="v">${o.externalId ? `${escapeHTML(o.externalId)} <span style="color:var(--ink-faint);font-size:12px">· Comptoir #${o.orderNumber}</span>` : `#${o.orderNumber}`}</div></div>
       <div class="item"><div class="k">Statut</div><div class="v">${o.channelType === 'custom' ? `
         <select id="orderStatusSelect" data-order-id="${o.id}">
           <option value="preparation" ${o.status === 'preparation' ? 'selected' : ''}>En préparation</option>
@@ -2783,6 +2796,13 @@ function openOrderDetailModal(orderId) {
       ` : `<span class="status-chip ${cls}"><span class="dot"></span>${label}</span>`}</div></div>
     </div>
     ${o.channelType === 'custom' ? `<div class="card-sub" style="margin-top:-6px; margin-bottom:14px;">Un site personnalisé n'a pas de webhook de mise à jour automatique — modifiez le statut ici quand il change réellement sur votre site.</div>` : ''}
+    ${sameCustomer.length > 1 ? `<div class="card-sub" style="margin-bottom:14px;">${escapeHTML(o.customer)} : ${sameCustomer.length} commandes au total, ${fmtEUR(customerTotal)} dépensés (hors retours).</div>` : ''}
+    ${receivedData.length ? `
+    <div style="border-top:1px solid var(--rule-soft); padding-top:14px; margin-bottom:14px;">
+      <div style="font-size:12.5px; color:var(--ink-faint); margin-bottom:10px;">Données reçues du site</div>
+      <div class="detail-grid">${receivedData.map(([k, v]) => `<div class="item"><div class="k">${escapeHTML(k)}</div><div class="v">${escapeHTML(v)}</div></div>`).join('')}</div>
+    </div>` : ''}
+    ${o.updatedAt ? `<div class="card-sub" style="margin-bottom:14px;">Dernière mise à jour : ${fmtDateTime(o.updatedAt)}</div>` : ''}
     <div style="border-top:1px solid var(--rule-soft); padding-top:14px;">
       <div style="font-size:12.5px; color:var(--ink-faint); margin-bottom:12px;">Champs de suivi</div>
       ${state.customFields.length ? state.customFields.map(f => {
