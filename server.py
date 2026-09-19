@@ -1039,7 +1039,7 @@ STATUS_ALIASES = {
 # Every alias name across every recognized field, lowercased — never re-offer one of these
 # as a "discovered" extra field, it's already surfaced as amount/status/customer/etc.
 _CONSUMED_FIELD_KEYS = {alias.lower() for aliases in FIELD_ALIASES.values() for alias in aliases} | {
-    "customer", "billing", "shipping", "items", "products", "lineitems", "line_items",
+    "customer", "billing", "shipping", "country", "countrycode", "country_code", "pays", "items", "products", "lineitems", "line_items",
 }
 MAX_EXTRA_FIELDS_PER_ORDER = 20
 
@@ -1125,6 +1125,49 @@ def _infer_status_from_signals(body):
         return "livree"
 
     return None
+
+
+_COUNTRY_NAMES = {
+    "france": "FR", "belgique": "BE", "belgium": "BE", "suisse": "CH", "switzerland": "CH",
+    "allemagne": "DE", "germany": "DE", "espagne": "ES", "spain": "ES", "italie": "IT", "italy": "IT",
+    "portugal": "PT", "royaume-uni": "GB", "royaume uni": "GB", "united kingdom": "GB", "uk": "GB",
+    "etats-unis": "US", "états-unis": "US", "united states": "US", "usa": "US", "canada": "CA",
+    "pays-bas": "NL", "netherlands": "NL", "luxembourg": "LU", "irlande": "IE", "ireland": "IE",
+    "autriche": "AT", "austria": "AT", "maroc": "MA", "morocco": "MA", "tunisie": "TN", "algerie": "DZ",
+    "algérie": "DZ", "suede": "SE", "suède": "SE", "sweden": "SE", "danemark": "DK", "denmark": "DK",
+    "norvege": "NO", "norvège": "NO", "norway": "NO", "pologne": "PL", "poland": "PL", "japon": "JP", "japan": "JP",
+    "australie": "AU", "australia": "AU",
+}
+
+
+def _to_country_code(raw):
+    """ISO 3166-1 alpha-2 (uppercase) from a code or a common country name, else None."""
+    if raw in (None, ""):
+        return None
+    v = str(raw).strip()
+    if len(v) == 2 and v.isalpha():
+        return v.upper()
+    return _COUNTRY_NAMES.get(v.lower())
+
+
+def _extract_country(body):
+    keys = ["countryCode", "country_code", "country", "pays", "shippingCountry", "shipping_country"]
+    code = _to_country_code(_pick_field(body, keys))
+    if code:
+        return code
+    for nested in ("shipping_address", "shippingAddress", "shipping", "billing_address", "billingAddress", "billing", "address", "customer"):
+        obj = body.get(nested)
+        if isinstance(obj, dict):
+            code = _to_country_code(_pick_field(obj, keys))
+            if code:
+                return code
+            default_addr = obj.get("default_address")
+            if isinstance(default_addr, dict):
+                code = _to_country_code(_pick_field(default_addr, keys))
+                if code:
+                    return code
+    return None
+
 
 
 def _parse_amount(raw):
@@ -1265,6 +1308,8 @@ def _ingest_order_core(conn, user_id: str, channel_type: str, connector_id: str,
                 product_name = first
     product_name = str(product_name).strip() if product_name not in (None, "") else None
 
+    country = _extract_country(body)
+
     quantity_raw = _pick_field(body, FIELD_ALIASES["quantity"])
     if quantity_raw is None and isinstance(body.get("items"), list) and body["items"]:
         first_item = body["items"][0]
@@ -1355,6 +1400,9 @@ def _ingest_order_core(conn, user_id: str, channel_type: str, connector_id: str,
                 if existing.get("quantity") != quantity:
                     existing["quantity"] = quantity
                     changed = True
+                if country and existing.get("country") != country:
+                    existing["country"] = country
+                    changed = True
                 if round(existing.get("amount", 0) or 0, 2) != round(amount, 2):
                     existing["amount"] = round(amount, 2)
                     changed = True
@@ -1418,6 +1466,7 @@ def _ingest_order_core(conn, user_id: str, channel_type: str, connector_id: str,
             "date": date,
             "custom": _extract_extra_fields(body) if isinstance(body, dict) else {},
             "externalId": external_id,
+            "country": country,
             "updatedAt": now_iso,
         }
         orders.insert(0, order)

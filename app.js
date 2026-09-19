@@ -3,6 +3,14 @@ const fmtEUR = n => n.toLocaleString('fr-FR', { style: 'currency', currency: 'EU
 const fmtNum = n => n.toLocaleString('fr-FR');
 const fmtDate = iso => new Date(iso).toLocaleDateString('fr-FR', { day: '2-digit', month: 'short' });
 const fmtDateTime = iso => new Date(iso).toLocaleString('fr-FR', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
+// Regional-indicator emoji flag from an ISO alpha-2 code; empty when unknown.
+const flagEmoji = cc => (typeof cc === 'string' && /^[A-Za-z]{2}$/.test(cc))
+  ? String.fromCodePoint(...cc.toUpperCase().split('').map(c => 0x1F1E6 + c.charCodeAt(0) - 65)) : '';
+const countryName = cc => { try { return new Intl.DisplayNames(['fr'], { type: 'region' }).of(cc.toUpperCase()); } catch (e) { return cc; } };
+const flagHTML = o => o.country && flagEmoji(o.country) ? `<span class="flag" title="${escapeHTML(countryName(o.country))}">${flagEmoji(o.country)}</span> ` : '';
+// Sales always read newest-first by their real sale date — never by array position, which
+// reflects insertion order (a bulk resync of old orders, or a status update, must not reshuffle).
+const byDateDesc = list => [...list].sort((a, b) => new Date(b.date) - new Date(a.date));
 const uid = () => Math.random().toString(36).slice(2, 9);
 const clamp = (n, min, max) => Math.max(min, Math.min(max, n));
 const daysAgo = n => { const d = new Date(); d.setDate(d.getDate() - n); return d; };
@@ -1607,7 +1615,7 @@ function pageOverview() {
   const bestSellers = topProducts(bounds);
   const habits = computeSalesHabits();
   const alerts = stockAlerts();
-  const recent = state.orders.slice(0, 6);
+  const recent = byDateDesc(state.orders).slice(0, 6);
   const todayISO = new Date().toISOString().slice(0, 10);
   const fallbackFrom = daysAgo(29).toISOString().slice(0, 10);
   const custom = state.rangeCustom || {};
@@ -1816,7 +1824,7 @@ function orderRow(o, withDate) {
   return `<tr>
     <td>${orderDisplayRef(o)}</td>
     <td><span class="chan-dot"><span class="sw" style="background:${channelColor(o.channelType)}"></span>${connectorLabel(o.channelType)}</span></td>
-    <td>${escapeHTML(o.customer)}</td>
+    <td>${flagHTML(o)}${escapeHTML(o.customer)}</td>
     ${withDate ? `<td>${fmtDate(o.date)}</td>` : ''}
     <td class="amount">${fmtEUR(o.amount)}</td>
     <td><span class="status-chip ${cls}"><span class="dot"></span>${label}</span></td>
@@ -1835,7 +1843,7 @@ function themeToggleHTML() {
 /* ---------- page: ventes ---------- */
 let salesFilter = { channel: 'all', status: 'all', q: '' };
 function pageVentes() {
-  let list = [...state.orders];
+  let list = byDateDesc(state.orders);
   if (salesFilter.channel !== 'all') list = list.filter(o => o.channelType === salesFilter.channel);
   if (salesFilter.status !== 'all') list = list.filter(o => o.status === salesFilter.status);
   if (salesFilter.q) {
@@ -1884,9 +1892,9 @@ function ventesOrderRow(o) {
   return `<tr data-action="openOrderDetail" data-id="${o.id}" class="row-click" role="button" tabindex="0">
     <td>${orderDisplayRef(o)}</td>
     <td><span class="chan-dot"><span class="sw" style="background:${channelColor(o.channelType)}"></span>${connectorLabel(o.channelType)}</span></td>
-    <td>${escapeHTML(o.customer)}</td>
+    <td>${flagHTML(o)}${escapeHTML(o.customer)}</td>
     <td>${product ? escapeHTML(product.name) : '<span style="color:var(--ink-faint)">—</span>'}</td>
-    <td>${fmtDate(o.date)}</td>
+    <td style="white-space:nowrap">${String(o.date).length <= 10 ? fmtDate(o.date) : fmtDateTime(o.date)}</td>
     <td class="amount">${fmtEUR(o.amount)}</td>
     <td><span class="status-chip ${cls}"><span class="dot"></span>${label}</span></td>
     ${state.customFields.map(f => { const v = f.source !== 'manual' ? o.custom[f.key] : o.custom[f.id]; return `<td>${v ? escapeHTML(v) : '<span style="color:var(--ink-faint)">—</span>'}</td>`; }).join('')}
@@ -2761,7 +2769,7 @@ function openOrderDetailModal(orderId) {
     <h3>Commande ${orderDisplayRef(o)}</h3>
     <div class="modal-sub">${connectorLabel(o.channelType)} · ${fmtDateTime(o.date)}</div>
     <div class="detail-grid">
-      <div class="item"><div class="k">Cliente</div><div class="v">${escapeHTML(o.customer)}</div></div>
+      <div class="item"><div class="k">Cliente</div><div class="v">${flagHTML(o)}${escapeHTML(o.customer)}</div></div>
       <div class="item"><div class="k">Produit</div><div class="v">${product ? escapeHTML(product.name) : '<span style="color:var(--ink-faint)">Non lié à un produit</span>'}</div></div>
       <div class="item"><div class="k">Montant</div><div class="v">${fmtEUR(o.amount)}</div></div>
       <div class="item"><div class="k">Canal</div><div class="v"><span class="chan-dot"><span class="sw" style="background:${channelColor(o.channelType)}"></span>${connectorLabel(o.channelType)}</span></div></div>
