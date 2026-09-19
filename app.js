@@ -1619,6 +1619,21 @@ function habitsInsightText(h) {
   if (h.nextBestDowDate) s += ` Le prochain ${dowName} est le ${fmtDate(h.nextBestDowDate.toISOString())} — pensez à renforcer votre communication (pub, posts, relances) dans les jours qui précèdent.`;
   return s;
 }
+// Indicators explain themselves: a KPI card flips over to show how its number is computed
+// (with the real figures behind it), and the list cards get an (i) toggle. Which ones are
+// open lives at module level because the whole page is re-rendered on every sync.
+const flippedKpis = new Set();
+const openHows = new Set();
+function kpiCard(key, label, target, format, valueText, deltaHtml, sparkHtml, explain) {
+  return `<div class="kpi ${flippedKpis.has(key) ? 'flipped' : ''}" data-kpi="${key}" data-action="flipKpi" role="button" tabindex="0" aria-label="${escapeHTML(label)} — cliquer pour voir le calcul">
+    <div class="kpi-inner">
+      <div class="kpi-face kpi-front"><div class="label">${label}<span class="kpi-hint" aria-hidden="true">Comment ?</span></div><div class="row"><span class="value" data-target="${target}" data-format="${format}">${valueText}</span>${deltaHtml}</div>${sparkHtml}</div>
+      <div class="kpi-face kpi-back"><div class="label">${label} — comment c'est calculé</div><div class="kpi-explain">${explain}</div><div class="kpi-explain sub">Le repère de variation compare à la période précédente de même durée.</div></div>
+    </div>
+  </div>`;
+}
+function howBtn(id) { return `<button type="button" class="how-btn ${openHows.has(id) ? 'on' : ''}" data-action="toggleHow" data-how="${id}" aria-label="Comment c'est calculé ?" title="Comment c'est calculé ?">i</button>`; }
+function howBox(id, html) { return `<div class="how-box" data-how-box="${id}" ${openHows.has(id) ? '' : 'hidden'}>${html}</div>`; }
 function pageOverview() {
   const bounds = getRangeBounds();
   const granularity = state.overviewGranularity;
@@ -1629,6 +1644,7 @@ function pageOverview() {
   const breakdown = channelBreakdown(bounds);
   const bestSellers = topProducts(bounds);
   const countries = countryBreakdown(bounds);
+  const returnsCount = ordersInRange(bounds).filter(o => o.status === 'retour').length;
   const habits = computeSalesHabits();
   const alerts = stockAlerts();
   const recent = byDateDesc(state.orders).slice(0, 6);
@@ -1660,10 +1676,14 @@ function pageOverview() {
     </div>
 
     <div class="kpis">
-      <div class="kpi" data-kpi="ca"><div class="label">Chiffre d'affaires</div><div class="row"><span class="value" data-target="${k.ca}" data-format="eur">${fmtEUR(k.ca)}</span>${deltaHTML(k.caDelta)}</div>${sparkline(series.map(s => s.ca), 'var(--brand)')}</div>
-      <div class="kpi" data-kpi="count"><div class="label">Commandes</div><div class="row"><span class="value" data-target="${k.count}" data-format="num">${fmtNum(k.count)}</span>${deltaHTML(k.countDelta)}</div>${sparkline(series.map(s => s.count), 'var(--brand)')}</div>
-      <div class="kpi" data-kpi="panier"><div class="label">Panier moyen</div><div class="row"><span class="value" data-target="${k.panier}" data-format="eur">${fmtEUR(k.panier)}</span>${deltaHTML(k.panierDelta)}</div>${sparkline(series.map(s => s.count ? s.ca / s.count : 0), 'var(--brand)')}</div>
-      <div class="kpi" data-kpi="taux"><div class="label">Taux de retour</div><div class="row"><span class="value" data-target="${k.tauxRetour}" data-format="pct">${k.tauxRetour.toFixed(1)}%</span>${deltaHTML(-k.tauxRetourDelta, true)}</div>${sparkline(series.map(s => s.count ? (s.retours / s.count) * 100 : 0), k.tauxRetourDelta > 0 ? 'var(--critical)' : 'var(--brand)')}</div>
+      ${kpiCard('ca', "Chiffre d'affaires", k.ca, 'eur', fmtEUR(k.ca), deltaHTML(k.caDelta), sparkline(series.map(s => s.ca), 'var(--brand)'),
+        `Somme des montants des <b>${fmtNum(k.count)}</b> commandes de la période (${rangeLabel(bounds)}), retours inclus : <b>${fmtEUR(k.ca)}</b>.`)}
+      ${kpiCard('count', 'Commandes', k.count, 'num', fmtNum(k.count), deltaHTML(k.countDelta), sparkline(series.map(s => s.count), 'var(--brand)'),
+        `Nombre de commandes reçues sur la période (${rangeLabel(bounds)}), tous statuts confondus, retours inclus.`)}
+      ${kpiCard('panier', 'Panier moyen', k.panier, 'eur', fmtEUR(k.panier), deltaHTML(k.panierDelta), sparkline(series.map(s => s.count ? s.ca / s.count : 0), 'var(--brand)'),
+        `Chiffre d'affaires ÷ nombre de commandes : ${fmtEUR(k.ca)} ÷ ${fmtNum(k.count)} = <b>${fmtEUR(k.panier)}</b>.`)}
+      ${kpiCard('taux', 'Taux de retour', k.tauxRetour, 'pct', `${k.tauxRetour.toFixed(1)}%`, deltaHTML(-k.tauxRetourDelta, true), sparkline(series.map(s => s.count ? (s.retours / s.count) * 100 : 0), k.tauxRetourDelta > 0 ? 'var(--critical)' : 'var(--brand)'),
+        `Commandes au statut « Retour » ÷ toutes les commandes : ${fmtNum(returnsCount)} ÷ ${fmtNum(k.count)} = <b>${k.tauxRetour.toFixed(1)}%</b>.`)}
     </div>
 
     <div class="grid">
@@ -1689,7 +1709,8 @@ function pageOverview() {
 
     <div class="grid">
       <div class="card">
-        <h2>Produits les plus vendus</h2>
+        <h2>Produits les plus vendus ${howBtn('produits')}</h2>
+        ${howBox('produits', "Produits classés par quantité vendue sur la période. Les retours sont exclus, et seules les commandes rattachées à un produit sont comptées.")}
         <div class="card-sub">${rangeLabel(bounds)} · classé par quantité vendue</div>
         ${bestSellers.length ? bestSellers.map(r => `
           <div class="alert-row">
@@ -1698,7 +1719,8 @@ function pageOverview() {
           </div>`).join('') : `<div class="empty">Aucune vente liée à un produit sur cette période.</div>`}
       </div>
       <div class="card">
-        <h2>Répartition par canal</h2>
+        <h2>Répartition par canal ${howBtn('canal')}</h2>
+        ${howBox('canal', "Chaque canal = somme des montants de ses commandes ÷ chiffre d'affaires total de la période (retours inclus).")}
         <div class="card-sub">Part du chiffre d'affaires</div>
         ${breakdown.length ? breakdown.map(b => `
           <div class="chan-row">
@@ -1709,7 +1731,8 @@ function pageOverview() {
     </div>
 
     <div class="card" style="margin-bottom:14px;">
-      <h2>Ventes par pays</h2>
+      <h2>Ventes par pays ${howBtn('pays')}</h2>
+      ${howBox('pays', "Chaque pays = nombre de ventes de ce pays ÷ nombre total de ventes de la période. Les commandes « Retour » sont exclues. Une commande sans pays est comptée dans « Pays non renseigné ».")}
       <div class="card-sub">${rangeLabel(bounds)} · part du nombre de ventes (retours exclus)</div>
       ${countries.length ? countries.map(c => {
         const pctTxt = c.pct > 0 && c.pct < 1 ? '<1%' : `${Math.round(c.pct)}%`;
@@ -2918,6 +2941,20 @@ document.addEventListener('click', e => {
   if (!el) return;
   const action = el.dataset.action;
 
+  if (action === 'flipKpi') {
+    const key = el.dataset.kpi;
+    flippedKpis.has(key) ? flippedKpis.delete(key) : flippedKpis.add(key);
+    el.classList.toggle('flipped', flippedKpis.has(key));
+    return;
+  }
+  if (action === 'toggleHow') {
+    const id = el.dataset.how;
+    openHows.has(id) ? openHows.delete(id) : openHows.add(id);
+    el.classList.toggle('on', openHows.has(id));
+    const box = document.querySelector(`[data-how-box="${id}"]`);
+    if (box) box.hidden = !openHows.has(id);
+    return;
+  }
   if (action === 'toggleTheme') return toggleTheme();
   if (action === 'landingToggleTheme') {
     state.theme = resolvedTheme() === 'dark' ? 'light' : 'dark';
