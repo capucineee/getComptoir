@@ -1231,12 +1231,17 @@ function computeKPIs(bounds) {
   const prevTo = bounds.from.getTime();
   const prev = state.orders.filter(o => { const t = new Date(o.date).getTime(); return t >= prevFrom && t < prevTo; });
 
-  const ca = cur.reduce((s, o) => s + o.amount, 0);
-  const caPrev = prev.reduce((s, o) => s + o.amount, 0);
+  // Revenue is net of returns: a returned order isn't money kept. Orders received (count)
+  // still includes them — the return rate needs that denominator.
+  const kept = cur.filter(o => o.status !== 'retour');
+  const keptPrev = prev.filter(o => o.status !== 'retour');
+  const ca = kept.reduce((s, o) => s + o.amount, 0);
+  const caPrev = keptPrev.reduce((s, o) => s + o.amount, 0);
   const count = cur.length;
   const countPrev = prev.length || 1;
-  const panier = count ? ca / count : 0;
-  const panierPrev = prev.length ? caPrev / prev.length : panier;
+  const sales = kept.length;
+  const panier = sales ? ca / sales : 0;
+  const panierPrev = keptPrev.length ? caPrev / keptPrev.length : panier;
   const retours = cur.filter(o => o.status === 'retour').length;
   const tauxRetour = count ? (retours / count) * 100 : 0;
   const retoursPrev = prev.filter(o => o.status === 'retour').length;
@@ -1246,7 +1251,7 @@ function computeKPIs(bounds) {
 
   return {
     ca, caDelta: pct(ca, caPrev),
-    count, countDelta: pct(count, countPrev),
+    count, sales, countDelta: pct(count, countPrev),
     panier, panierDelta: pct(panier, panierPrev),
     tauxRetour, tauxRetourDelta: Math.round((tauxRetour - tauxRetourPrev) * 10) / 10
   };
@@ -1287,18 +1292,18 @@ function trendSeries(bounds, granularity) {
   }
   if (!keys.length) keys.push(bucketStart(bounds.from, granularity).getTime());
   const map = {};
-  keys.forEach(t => { map[t] = { t, ca: 0, count: 0, retours: 0 }; });
+  keys.forEach(t => { map[t] = { t, ca: 0, count: 0, sales: 0, retours: 0 }; });
   cur.forEach(o => {
     const key = bucketKey(new Date(o.date), granularity);
     if (!map[key]) return;
-    map[key].ca += o.amount;
     map[key].count += 1;
     if (o.status === 'retour') map[key].retours += 1;
+    else { map[key].ca += o.amount; map[key].sales += 1; }
   });
   return keys.map(t => map[t]);
 }
 function channelBreakdown(bounds) {
-  const cur = ordersInRange(bounds);
+  const cur = ordersInRange(bounds).filter(o => o.status !== 'retour');
   const total = cur.reduce((s, o) => s + o.amount, 0) || 1;
   const byType = {};
   cur.forEach(o => { byType[o.channelType] = (byType[o.channelType] || 0) + o.amount; });
@@ -1677,11 +1682,11 @@ function pageOverview() {
 
     <div class="kpis">
       ${kpiCard('ca', "Chiffre d'affaires", k.ca, 'eur', fmtEUR(k.ca), deltaHTML(k.caDelta), sparkline(series.map(s => s.ca), 'var(--brand)'),
-        `Somme des montants des <b>${fmtNum(k.count)}</b> commandes de la période (${rangeLabel(bounds)}), retours inclus : <b>${fmtEUR(k.ca)}</b>.`)}
+        `Somme des montants des <b>${fmtNum(k.sales)}</b> ventes de la période (${rangeLabel(bounds)}), <b>retours exclus</b> : <b>${fmtEUR(k.ca)}</b>.`)}
       ${kpiCard('count', 'Commandes', k.count, 'num', fmtNum(k.count), deltaHTML(k.countDelta), sparkline(series.map(s => s.count), 'var(--brand)'),
-        `Nombre de commandes reçues sur la période (${rangeLabel(bounds)}), tous statuts confondus, retours inclus.`)}
-      ${kpiCard('panier', 'Panier moyen', k.panier, 'eur', fmtEUR(k.panier), deltaHTML(k.panierDelta), sparkline(series.map(s => s.count ? s.ca / s.count : 0), 'var(--brand)'),
-        `Chiffre d'affaires ÷ nombre de commandes : ${fmtEUR(k.ca)} ÷ ${fmtNum(k.count)} = <b>${fmtEUR(k.panier)}</b>.`)}
+        `Nombre de commandes reçues sur la période (${rangeLabel(bounds)}), tous statuts confondus, retours inclus (c'est ce qui sert de base au taux de retour).`)}
+      ${kpiCard('panier', 'Panier moyen', k.panier, 'eur', fmtEUR(k.panier), deltaHTML(k.panierDelta), sparkline(series.map(s => s.sales ? s.ca / s.sales : 0), 'var(--brand)'),
+        `Chiffre d'affaires ÷ nombre de ventes (retours exclus) : ${fmtEUR(k.ca)} ÷ ${fmtNum(k.sales)} = <b>${fmtEUR(k.panier)}</b>.`)}
       ${kpiCard('taux', 'Taux de retour', k.tauxRetour, 'pct', `${k.tauxRetour.toFixed(1)}%`, deltaHTML(-k.tauxRetourDelta, true), sparkline(series.map(s => s.count ? (s.retours / s.count) * 100 : 0), k.tauxRetourDelta > 0 ? 'var(--critical)' : 'var(--brand)'),
         `Commandes au statut « Retour » ÷ toutes les commandes : ${fmtNum(returnsCount)} ÷ ${fmtNum(k.count)} = <b>${k.tauxRetour.toFixed(1)}%</b>.`)}
     </div>
@@ -1720,7 +1725,7 @@ function pageOverview() {
       </div>
       <div class="card">
         <h2>Répartition par canal ${howBtn('canal')}</h2>
-        ${howBox('canal', "Chaque canal = somme des montants de ses commandes ÷ chiffre d'affaires total de la période (retours inclus).")}
+        ${howBox('canal', "Chaque canal = somme des montants de ses commandes ÷ chiffre d'affaires total de la période (retours exclus).")}
         <div class="card-sub">Part du chiffre d'affaires</div>
         ${breakdown.length ? breakdown.map(b => `
           <div class="chan-row">
