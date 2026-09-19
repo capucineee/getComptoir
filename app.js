@@ -1180,6 +1180,7 @@ function closeModal() { document.getElementById('modalRoot').innerHTML = ''; }
 const ROUTES = [
   { path: '', label: "Vue d'ensemble", icon: 'M2 9h3v5H2zM6.5 5h3v9h-3zM11 2h3v12h-3z' },
   { path: 'ventes', label: 'Ventes', icon: null },
+  { path: 'expeditions', label: 'Expéditions', icon: null },
   { path: 'trafic', label: 'Trafic', icon: null },
   { path: 'stock', label: 'Stock', icon: null },
   { path: 'catalogue', label: 'Mon catalogue', icon: null },
@@ -2182,6 +2183,96 @@ function ventesOrderRow(o) {
 }
 function escapeHTML(s) { return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
 
+// Manual status change on a custom-site order (no webhook exists for it). Mirrors the
+// server's own reverse-old/apply-new stock logic (server.py's _adjust_stock): only 'retour'
+// releases stock back, so preparation <-> livree leaves stock alone, crossing to or from
+// retour does not. Also appends to the order's status history.
+function applyManualStatus(o, newStatus) {
+  const product = state.products.find(p => p.id === o.productId);
+  if (product) {
+    const qty = o.quantity || 1;
+    const oldDelta = o.status === 'retour' ? qty : -qty;
+    const newDelta = newStatus === 'retour' ? qty : -qty;
+    product.stock = Math.max(0, (product.stock || 0) - oldDelta + newDelta);
+    product.updatedAt = new Date().toISOString();
+  }
+  if (!o.history || !o.history.length) o.history = [{ status: o.status, at: o.date }];
+  o.history.push({ status: newStatus, at: new Date().toISOString(), source: 'manual' });
+  o.history = o.history.slice(-50);
+  o.status = newStatus;
+  o.updatedAt = new Date().toISOString();
+}
+
+/* ---------- page: expéditions du jour ---------- */
+// Fulfillment is a Comptoir-side to-do layer on top of the platform status: an order stays
+// "en préparation" for the platform until it's really shipped, but the merchant needs to
+// know which of those are still to pack, packed and ready, or stuck. Only orders whose
+// status is still 'preparation' appear; once the platform (or a manual change) marks them
+// livrée/retour they leave the board on their own.
+const BLOCK_REASONS = ['Rupture de stock', 'Adresse à vérifier', 'Paiement en attente', 'Client à contacter', 'Article abîmé', 'Autre'];
+function fulfillmentOf(o) { return o.status === 'preparation' ? (o.fulfillment || 'a_preparer') : null; }
+function ageDays(o) { return Math.floor((Date.now() - new Date(o.date).getTime()) / 86400000); }
+function shipCard(o, stage) {
+  const product = state.products.find(p => p.id === o.productId);
+  const age = ageDays(o);
+  const late = age >= 2;
+  return `<div class="ship-card ${stage === 'bloquee' ? 'blocked' : ''}">
+    <div class="ship-top"><b>${orderDisplayRef(o)}</b><span class="chan-dot"><span class="sw" style="background:${channelColor(o.channelType)}"></span>${connectorLabel(o.channelType)}</span></div>
+    <div class="ship-main">${flagHTML(o)}${escapeHTML(o.customer)}</div>
+    <div class="ship-sub">${product ? `${escapeHTML(product.name)} × ${fmtNum(o.quantity || 1)}` : 'Produit non lié'} · ${fmtEUR(o.amount)}</div>
+    <div class="ship-sub">${String(o.date).length <= 10 ? fmtDate(o.date) : fmtDateTime(o.date)} ${late ? `<span class="status-chip critical" style="margin-left:4px;"><span class="dot"></span>${age} j de retard</span>` : age === 0 ? '<span class="status-chip good" style="margin-left:4px;"><span class="dot"></span>aujourd\'hui</span>' : `<span style="color:var(--ink-faint)">· il y a ${age} j</span>`}</div>
+    ${stage === 'bloquee' ? `<div class="ship-reason"><b>${escapeHTML(o.blockReason || 'Bloquée')}</b>${o.blockNote ? ` — ${escapeHTML(o.blockNote)}` : ''}<span>depuis ${o.blockedAt ? fmtDateTime(o.blockedAt) : '—'}</span></div>` : ''}
+    <div class="ship-actions">
+      ${stage === 'a_preparer' ? `<button class="btn sm primary" data-action="shipReady" data-id="${o.id}">Prête</button><button class="btn sm" data-action="shipBlockOpen" data-id="${o.id}">Bloquer</button>` : ''}
+      ${stage === 'prete' ? `${o.channelType === 'custom' ? `<button class="btn sm primary" data-action="shipDeliver" data-id="${o.id}">Marquer expédiée</button>` : ''}<button class="btn sm" data-action="shipBlockOpen" data-id="${o.id}">Bloquer</button><button class="btn sm" data-action="shipReset" data-id="${o.id}">À préparer</button>` : ''}
+      ${stage === 'bloquee' ? `<button class="btn sm primary" data-action="shipReady" data-id="${o.id}">Débloquer · prête</button><button class="btn sm" data-action="shipReset" data-id="${o.id}">À préparer</button><button class="btn sm" data-action="shipBlockOpen" data-id="${o.id}">Modifier</button>` : ''}
+      <button class="btn sm" data-action="openOrderDetail" data-id="${o.id}">Détail</button>
+    </div>
+  </div>`;
+}
+function pageExpeditions() {
+  const pending = state.orders.filter(o => o.status === 'preparation').sort((a, b) => new Date(a.date) - new Date(b.date));
+  const cols = {
+    a_preparer: pending.filter(o => fulfillmentOf(o) === 'a_preparer'),
+    prete: pending.filter(o => fulfillmentOf(o) === 'prete'),
+    bloquee: pending.filter(o => fulfillmentOf(o) === 'bloquee')
+  };
+  const today = new Date().toDateString();
+  const newToday = pending.filter(o => new Date(o.date).toDateString() === today).length;
+  const lateCount = pending.filter(o => ageDays(o) >= 2).length;
+  const col = (key, title, sub, cls) => `
+    <div class="ship-col">
+      <div class="ship-col-head"><h2>${title}</h2><span class="status-chip ${cls}"><span class="dot"></span>${fmtNum(cols[key].length)}</span></div>
+      <div class="card-sub">${sub}</div>
+      ${cols[key].length ? cols[key].map(o => shipCard(o, key)).join('') : `<div class="empty">${key === 'a_preparer' ? 'Rien à préparer.' : key === 'prete' ? 'Aucune commande prête.' : 'Aucune commande bloquée.'}</div>`}
+    </div>`;
+  return `
+    <div class="topbar">
+      <div><h1>Expéditions du jour</h1><div class="sub">${fmtNum(pending.length)} commande${pending.length !== 1 ? 's' : ''} en cours · ${fmtNum(newToday)} reçue${newToday !== 1 ? 's' : ''} aujourd'hui${lateCount ? ` · <span style="color:var(--critical)">${fmtNum(lateCount)} en retard (2 j et +)</span>` : ''}</div></div>
+      <div class="topbar-actions">${themeToggleHTML()}</div>
+    </div>
+    <div class="callout" style="margin-bottom:16px;">Le classement est propre à Comptoir : il ne change rien sur votre plateforme. Une commande quitte cette page dès qu'elle est livrée ou retournée (automatiquement pour Shopify et WooCommerce, ou via « Marquer expédiée » pour un site personnalisé).</div>
+    <div class="ship-board">
+      ${col('a_preparer', 'À préparer', 'Les plus anciennes en premier', 'warning')}
+      ${col('prete', 'Prêtes', 'Emballées, en attente du transporteur', 'good')}
+      ${col('bloquee', 'Bloquées', 'À débloquer avant expédition', 'critical')}
+    </div>
+  `;
+}
+function openBlockModal(orderId) {
+  const o = state.orders.find(x => x.id === orderId);
+  if (!o) return;
+  const cur = o.fulfillment === 'bloquee' ? o.blockReason : BLOCK_REASONS[0];
+  openModal(`
+    <h3>Bloquer la commande ${orderDisplayRef(o)}</h3>
+    <div class="modal-sub">Elle passera dans la colonne « Bloquées » avec la raison, pour ne pas être oubliée.</div>
+    <div class="field"><label>Raison</label>
+      <select id="blockReason">${BLOCK_REASONS.map(r => `<option ${r === cur ? 'selected' : ''}>${r}</option>`).join('')}</select></div>
+    <div class="field"><label>Précision (facultatif)</label><input type="text" id="blockNote" maxlength="140" placeholder="Ex. attendre le réassort du 25" value="${escapeHTML(o.blockNote || '')}"></div>
+    <div class="actions"><button class="btn" data-action="closeModal">Annuler</button><button class="btn primary" data-action="shipBlockSubmit" data-id="${o.id}">Bloquer</button></div>
+  `);
+}
+
 /* ---------- page: stock ---------- */
 function pageStock() {
   const alerts = stockAlerts().length;
@@ -2807,6 +2898,7 @@ function renderNav() {
   const iconPaths = {
     '': '<path d="M2 9h3v5H2zM6.5 5h3v9h-3zM11 2h3v12h-3z"/>',
     'ventes': '<circle cx="5" cy="13" r="1.4"/><circle cx="12" cy="13" r="1.4"/><path d="M1 1h2l1.6 8.2a1.5 1.5 0 0 0 1.48 1.3h6.1a1.5 1.5 0 0 0 1.46-1.16L15 4H3.6" fill="none" stroke="currentColor" stroke-width="1.3"/>',
+    'expeditions': '<path d="M1 4h9v7H1zM10 6.5h3l2 2V11h-5z" fill="none" stroke="currentColor" stroke-width="1.3"/><circle cx="4" cy="12" r="1.3"/><circle cx="12" cy="12" r="1.3"/>',
     'trafic': '<circle cx="8" cy="5.5" r="2.6" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M2.5 14c0-3 2.4-4.6 5.5-4.6s5.5 1.6 5.5 4.6" fill="none" stroke="currentColor" stroke-width="1.3"/>',
     'stock': '<path d="M2 4l6-3 6 3v8l-6 3-6-3z" fill="none" stroke="currentColor" stroke-width="1.3"/>',
     'catalogue': '<path d="M8.5 2H3a1 1 0 0 0-1 1v5.5a1 1 0 0 0 .3.7l6 6a1 1 0 0 0 1.4 0l4.5-4.5a1 1 0 0 0 0-1.4l-6-6a1 1 0 0 0-.7-.3z" fill="none" stroke="currentColor" stroke-width="1.3"/><circle cx="5" cy="5" r="1" fill="currentColor"/>',
@@ -2816,8 +2908,9 @@ function renderNav() {
     'comptabilite': '<path d="M3 2h10v12H3z" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M5.5 5h5M5.5 8h5M5.5 11h3" stroke="currentColor" stroke-width="1.3"/>',
     'parametres': '<circle cx="8" cy="8" r="2.2" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M8 1.6v1.6M8 12.8v1.6M14.4 8h-1.6M3.2 8H1.6M12.4 3.6l-1.1 1.1M4.7 11.3l-1.1 1.1M12.4 12.4l-1.1-1.1M4.7 4.7l-1.1-1.1" stroke="currentColor" stroke-width="1.3"/>'
   };
+  const blockedCount = state.orders.filter(o => fulfillmentOf(o) === 'bloquee').length;
   document.getElementById('nav').innerHTML = ROUTES.map(r => `
-    <a href="#${r.path}" class="${path === r.path ? 'active' : ''}"><svg viewBox="0 0 16 16" fill="currentColor">${iconPaths[r.path]}</svg>${r.label}</a>
+    <a href="#${r.path}" class="${path === r.path ? 'active' : ''}"><svg viewBox="0 0 16 16" fill="currentColor">${iconPaths[r.path]}</svg>${r.label}${r.path === 'expeditions' && blockedCount ? `<span class="nav-badge" title="${blockedCount} commande${blockedCount !== 1 ? 's' : ''} bloquée${blockedCount !== 1 ? 's' : ''}">${blockedCount}</span>` : ''}</a>
   `).join('');
 
   const connected = connectedTypes().length;
@@ -2840,7 +2933,7 @@ function render() {
   const main = document.getElementById('main');
   const path = currentPath();
   if (path === 'connecteurs' || path === 'trafic') loadTracking();
-  const pages = { '': pageOverview, 'ventes': pageVentes, 'trafic': pageTrafic, 'stock': pageStock, 'catalogue': pageCatalogue, 'sav': pageSAV, 'connecteurs': pageConnecteurs, 'facturation': pageFacturation, 'comptabilite': pageComptabilite, 'parametres': pageParametres };
+  const pages = { '': pageOverview, 'ventes': pageVentes, 'trafic': pageTrafic, 'expeditions': pageExpeditions, 'stock': pageStock, 'catalogue': pageCatalogue, 'sav': pageSAV, 'connecteurs': pageConnecteurs, 'facturation': pageFacturation, 'comptabilite': pageComptabilite, 'parametres': pageParametres };
   main.innerHTML = (state.emailVerified === false ? verifyEmailBannerHTML() : '') + (pages[path] || pageOverview)();
   if (path === '') {
     const bounds = getRangeBounds();
@@ -3096,6 +3189,7 @@ function openOrderDetailModal(orderId) {
         </select>
       ` : `<span class="status-chip ${cls}"><span class="dot"></span>${label}</span>`}</div></div>
     </div>
+    ${fulfillmentOf(o) ? `<div class="card-sub" style="margin-bottom:14px;">Expédition : <b>${{ a_preparer: 'à préparer', prete: 'prête', bloquee: 'bloquée' }[fulfillmentOf(o)]}</b>${o.fulfillment === 'bloquee' ? ` — ${escapeHTML(o.blockReason || '')}${o.blockNote ? ` (${escapeHTML(o.blockNote)})` : ''}` : ''} · <a href="#expeditions" data-action="closeModal" style="color:var(--brand)">Voir les expéditions →</a></div>` : ''}
     ${o.channelType === 'custom' ? `<div class="card-sub" style="margin-top:-6px; margin-bottom:14px;">Un site personnalisé n'a pas de webhook de mise à jour automatique — modifiez le statut ici quand il change réellement sur votre site.</div>` : ''}
     ${sameCustomer.length > 1 ? `<div class="card-sub" style="margin-bottom:14px;">${escapeHTML(o.customer)} : ${sameCustomer.length} commandes au total, ${fmtEUR(customerTotal)} dépensés (hors retours).</div>` : ''}
     ${receivedData.length ? `
@@ -3188,6 +3282,27 @@ document.addEventListener('click', e => {
   if (!el) return;
   const action = el.dataset.action;
 
+  if (['shipReady', 'shipReset', 'shipBlockOpen', 'shipBlockSubmit', 'shipDeliver'].includes(action)) {
+    const o = state.orders.find(x => x.id === el.dataset.id);
+    if (!o) return;
+    if (action === 'shipBlockOpen') return openBlockModal(o.id);
+    const now = new Date().toISOString();
+    if (action === 'shipReady') { o.fulfillment = 'prete'; delete o.blockReason; delete o.blockNote; delete o.blockedAt; toast(`Commande ${orderDisplayRef(o)} prête.`); }
+    if (action === 'shipReset') { o.fulfillment = 'a_preparer'; delete o.blockReason; delete o.blockNote; delete o.blockedAt; toast(`Commande ${orderDisplayRef(o)} remise à préparer.`); }
+    if (action === 'shipBlockSubmit') {
+      const wasBlocked = o.fulfillment === 'bloquee';
+      o.fulfillment = 'bloquee';
+      o.blockReason = document.getElementById('blockReason').value;
+      o.blockNote = document.getElementById('blockNote').value.trim();
+      if (!wasBlocked) o.blockedAt = now;
+      closeModal();
+      toast(`Commande ${orderDisplayRef(o)} bloquée.`);
+    }
+    if (action === 'shipDeliver') { if (o.channelType !== 'custom') return; applyManualStatus(o, 'livree'); toast(`Commande ${orderDisplayRef(o)} marquée expédiée.`); }
+    o.updatedAt = now;
+    persist(); render();
+    return;
+  }
   if (action === 'openTracking') return openTrackingModal(el.dataset.id);
   if (action === 'flipKpi') {
     const key = el.dataset.kpi;
@@ -3255,24 +3370,7 @@ document.addEventListener('click', e => {
         o.custom[inp.dataset.fieldId] = inp.value.trim();
       });
       const statusSelect = document.getElementById('orderStatusSelect');
-      if (statusSelect && statusSelect.value !== o.status) {
-        // Mirrors the server's own reverse-old/apply-new logic (server.py's
-        // _adjust_stock, used when a Shopify/WooCommerce webhook changes an order's
-        // status): only 'retour' releases stock back, so moving between preparation and
-        // livree is a no-op for stock, but crossing to or from retour is not.
-        const product = state.products.find(p => p.id === o.productId);
-        if (product) {
-          const qty = o.quantity || 1;
-          const oldDelta = o.status === 'retour' ? qty : -qty;
-          const newDelta = statusSelect.value === 'retour' ? qty : -qty;
-          product.stock = Math.max(0, (product.stock || 0) - oldDelta + newDelta);
-          product.updatedAt = new Date().toISOString();
-        }
-        if (!o.history || !o.history.length) o.history = [{ status: o.status, at: o.date }];
-        o.history.push({ status: statusSelect.value, at: new Date().toISOString(), source: 'manual' });
-        o.history = o.history.slice(-50);
-        o.status = statusSelect.value;
-      }
+      if (statusSelect && statusSelect.value !== o.status) applyManualStatus(o, statusSelect.value);
       // Stamped on every save (even one that only touched a custom field) — the server
       // merges orders/products by this timestamp on PUT /api/state (last-write-wins),
       // so a real connector's own update landing around the same time isn't silently
