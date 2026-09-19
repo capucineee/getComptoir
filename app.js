@@ -1152,7 +1152,7 @@ async function boot() {
   // server-side — this is what keeps an already-open tab from just sitting on stale data
   // indefinitely. Silent: a toast every 45s for a background sync would be more noise than
   // signal; the visible effect is the page updating on its own next render.
-  setInterval(() => refreshStateFromServer({ silent: true }), 45000);
+  setInterval(() => { refreshStateFromServer({ silent: true }); loadTracking(true); }, 45000);
 }
 
 /* ---------- toasts ---------- */
@@ -1639,6 +1639,120 @@ function kpiCard(key, label, target, format, valueText, deltaHtml, sparkHtml, ex
 }
 function howBtn(id) { return `<button type="button" class="how-btn ${openHows.has(id) ? 'on' : ''}" data-action="toggleHow" data-how="${id}" aria-label="Comment c'est calculé ?" title="Comment c'est calculé ?">i</button>`; }
 function howBox(id, html) { return `<div class="how-box" data-how-box="${id}" ${openHows.has(id) ? '' : 'hidden'}>${html}</div>`; }
+/* ---------- visitor tracking (cookieless script on the merchant's own site) ---------- */
+const TRACKABLE = ['custom', 'woocommerce', 'shopify'];
+const NO_TRACK_REASON = {
+  etsy: "Etsy n'autorise pas l'ajout de script sur votre boutique : impossible de compter les visiteurs depuis Comptoir.",
+  instagram: "Instagram Shop n'autorise pas de script externe : seules les statistiques propres à Instagram existent, pas un comptage des visiteurs.",
+  tiktok: "TikTok Shop n'autorise pas de script externe : impossible de compter les visiteurs depuis Comptoir."
+};
+let trackingStats = null, trackingFetchKey = '', trackingInflight = false;
+async function loadTracking(force = false) {
+  const session = getSession();
+  if (!session || !session.token || trackingInflight) return;
+  const b = getRangeBounds();
+  const from = b.from.toISOString().slice(0, 10), to = b.to.toISOString().slice(0, 10);
+  const key = `${from}|${to}`;
+  if (!force && key === trackingFetchKey) return;
+  trackingInflight = true;
+  trackingFetchKey = key;
+  try {
+    const fresh = await apiRequest(`/api/tracking/stats?from=${from}&to=${to}`, { token: session.token });
+    const changed = JSON.stringify(fresh) !== JSON.stringify(trackingStats);
+    trackingStats = fresh;
+    const path = currentPath();
+    if (changed && (path === '' || path === 'connecteurs') && !document.getElementById('modalRoot').innerHTML.trim()) render();
+  } catch (e) { /* stats are a bonus — never surface an error for them */ }
+  finally { trackingInflight = false; }
+}
+function trackingStatus(c) {
+  if (!TRACKABLE.includes(c.type)) return { level: 'neutral', label: 'Non disponible', reason: NO_TRACK_REASON[c.type] || "Cette plateforme n'autorise pas l'ajout d'un script." };
+  if (!trackingStats) return { level: 'neutral', label: 'Chargement…', reason: '' };
+  const site = trackingStats.sites.find(x => x.connectorId === c.id);
+  if (!site) return { level: 'warning', label: 'Non installé', reason: "Le script de suivi n'est pas encore ajouté à votre site." };
+  if (!site.lastSeenAt) return { level: 'warning', label: 'En attente', reason: "Script créé, mais aucune visite reçue pour l'instant : vérifiez qu'il est collé dans toutes les pages du site." };
+  const days = Math.floor((Date.now() - new Date(site.lastSeenAt.replace(' ', 'T') + 'Z').getTime()) / 86400000);
+  if (days >= 3) return { level: 'warning', label: 'Inactif', reason: `Aucune visite reçue depuis ${days} jours : le script a peut-être été retiré du site.` };
+  return { level: 'good', label: 'Suivi actif', reason: `${fmtNum(site.visitors)} visiteur${site.visitors !== 1 ? 's' : ''} sur la période.` };
+}
+function trafficSection(bounds) {
+  const st = trackingStats;
+  const capable = state.connectors.filter(c => TRACKABLE.includes(c.type));
+  const activeSites = st ? st.sites.filter(x => x.visitors > 0) : [];
+  const trackedTypes = new Set(activeSites.map(x => x.channelType));
+  const sales = ordersInRange(bounds).filter(o => o.status !== 'retour' && trackedTypes.has(o.channelType)).length;
+  const conv = st && st.visitors ? (sales / st.visitors) * 100 : 0;
+  const coverage = state.connectors.length ? state.connectors.map(c => {
+    const t = trackingStatus(c);
+    return `<div class="alert-row" style="align-items:flex-start;">
+      <div class="product">${escapeHTML(c.label)}<span class="chan">${escapeHTML(t.reason)}</span></div>
+      <span class="status-chip ${t.level}"><span class="dot"></span>${t.label}</span>
+    </div>`;
+  }).join('') : `<div class="empty">Aucune plateforme connectée.</div>`;
+  const spark = st && st.daily.length > 1 ? sparkline(st.daily.map(d => d.visitors), 'var(--brand)') : '';
+  const stat = (label, value) => `<div style="flex:1; min-width:110px;"><div class="card-sub" style="margin-bottom:2px;">${label}</div><div style="font-family:var(--font-mono); font-size:22px; font-weight:600;">${value}</div></div>`;
+  const visitorsCard = st && st.visitors > 0 ? `
+      <div style="display:flex; gap:18px; flex-wrap:wrap; margin:6px 0 4px;">
+        ${stat('Visiteurs', fmtNum(st.visitors))}
+        ${stat('Pages vues', fmtNum(st.views))}
+        ${stat('Taux de conversion', `${conv.toFixed(1)}%`)}
+      </div>
+      <div class="kpi-spark-wrap" style="max-width:340px;">${spark}</div>
+      <div class="card-sub" style="margin-top:10px;">Conversion = ${fmtNum(sales)} vente${sales !== 1 ? 's' : ''} ÷ ${fmtNum(st.visitors)} visiteur${st.visitors !== 1 ? 's' : ''}, sur les sites suivis uniquement.</div>`
+    : `<div class="empty">${!capable.length
+        ? "Le suivi des visiteurs fonctionne pour les sites où vous pouvez ajouter un script : Shopify, WooCommerce ou site personnalisé. Connectez-en un dans Connecteurs."
+        : `Aucune visite reçue sur cette période. <a href="#connecteurs" style="color:var(--brand)">Installer le suivi →</a>`}</div>`;
+  const total = st ? st.sources.reduce((a, r) => a + r.visitors, 0) || 1 : 1;
+  const totalC = st ? st.countries.reduce((a, r) => a + r.visitors, 0) || 1 : 1;
+  const bars = (rows, tot, labelFn) => rows.map(r => `
+    <div class="chan-row"><div class="top"><span>${labelFn(r)}</span><span class="pct">${Math.round(r.visitors / tot * 100)}%</span></div>
+    <div class="chan-bar"><div style="width:${r.visitors / tot * 100}%; background:var(--brand)"></div></div></div>`).join('');
+  return `
+    <div class="section-head"><h2>Trafic</h2><span>Qui visite vos sites, et combien achètent</span></div>
+    <div class="grid">
+      <div class="card">
+        <h2>Visiteurs ${howBtn('visiteurs')}</h2>
+        ${howBox('visiteurs', "Un script sans cookie placé sur votre site compte chaque visiteur une fois par jour (sans le identifier ni le suivre d'un jour à l'autre). Le total additionne les visiteurs de chaque jour. La conversion divise vos ventes (retours exclus) par ces visiteurs, uniquement pour les sites où le suivi est actif. Le pays est déduit du réseau ou du fuseau horaire du visiteur : approximatif.")}
+        <div class="card-sub">${rangeLabel(bounds)}</div>
+        ${visitorsCard}
+      </div>
+      <div class="card">
+        <h2>Couverture du suivi ${howBtn('couverture')}</h2>
+        ${howBox('couverture', "Le suivi ne peut exister que là où vous contrôlez le site et pouvez y ajouter un script. Etsy, Instagram Shop et TikTok Shop l'interdisent : Comptoir n'y voit que les ventes.")}
+        <div class="card-sub">Ce qui est suivi, et pourquoi</div>
+        ${coverage}
+      </div>
+    </div>
+    ${st && st.visitors > 0 ? `
+    <div class="grid">
+      <div class="card"><h2>D'où viennent-ils ?</h2><div class="card-sub">Part des visiteurs par source</div>${bars(st.sources, total, r => escapeHTML(r.source))}</div>
+      <div class="card"><h2>Pays des visiteurs</h2><div class="card-sub">Part des visiteurs (approximatif)</div>${bars(st.countries, totalC, r => r.country ? `${flagEmoji(r.country)} ${escapeHTML(countryName(r.country))}` : '<span style="color:var(--ink-faint)">Pays inconnu</span>')}</div>
+    </div>` : ''}
+  `;
+}
+async function openTrackingModal(connectorId) {
+  const c = state.connectors.find(x => x.id === connectorId);
+  const session = getSession();
+  if (!c || !session) return;
+  let key;
+  try { key = (await apiRequest('/api/tracking/site', { method: 'POST', token: session.token, body: { connectorId: c.id, channelType: c.type } })).siteKey; }
+  catch (err) { return toast(err.message, true); }
+  const snippet = `<script defer src="${location.origin}/t.js" data-site="${key}"></script>`;
+  const where = {
+    shopify: "Boutique en ligne → Thèmes → ⋯ → Modifier le code → fichier <b>theme.liquid</b> : collez le script juste avant la balise <b>&lt;/head&gt;</b>.",
+    woocommerce: "Collez le script dans l'en-tête de votre thème (fichier <b>header.php</b>, avant <b>&lt;/head&gt;</b>), ou via une extension du type « Insert Headers and Footers ».",
+    custom: "Collez le script dans le <b>&lt;head&gt;</b> de toutes les pages de votre site (idéalement dans le gabarit commun)."
+  }[c.type];
+  openModal(`
+    <h3>Suivi des visiteurs — ${escapeHTML(c.label)}</h3>
+    <div class="modal-sub">Un petit script sans cookie, qui compte les visiteurs de votre site.</div>
+    <div class="api-box"><div class="line"><span style="overflow-wrap:anywhere;">${escapeHTML(snippet)}</span><span class="copy" data-action="copyKey" data-label="Script copié." data-key="${escapeHTML(snippet)}">Copier</span></div></div>
+    <div class="card-sub" style="margin:12px 0;">${where}</div>
+    <div class="callout">Aucun cookie, aucune donnée personnelle conservée, et le signal « Do Not Track » des navigateurs est respecté : pas de bandeau de consentement nécessaire pour ce comptage. Les premières visites apparaissent dans la Vue d'ensemble dans la minute.</div>
+    <div class="actions"><button class="btn primary" data-action="closeModal">Fermer</button></div>
+  `);
+  loadTracking(true);
+}
 function pageOverview() {
   const bounds = getRangeBounds();
   const granularity = state.overviewGranularity;
@@ -1719,6 +1833,8 @@ function pageOverview() {
         ${!acc.expenses.length ? `<div class="card-sub" style="margin-top:12px;">Ajoutez vos charges dans <a href="#comptabilite" style="color:var(--brand)">Comptabilité</a> pour un bénéfice réaliste.</div>` : `<div class="card-sub" style="margin-top:12px;"><a href="#comptabilite" style="color:var(--brand)">Voir le détail en Comptabilité →</a></div>`}`;
       })()}
     </div>
+
+    ${trafficSection(bounds)}
 
     <div class="section-head"><h2>À traiter</h2><span>Dernières commandes et stocks à surveiller</span></div>
     <div class="grid">
@@ -2327,8 +2443,10 @@ function pageConnecteurs() {
             ${connectorGuideButton(c.type)}
           </div>
           <div class="meta">Dernière commande reçue : ${lastOrder ? fmtDateTime(lastOrder) : 'Aucune pour l\'instant'}</div>
+          ${(() => { const t = trackingStatus(c); return `<div class="meta" style="display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-top:8px;"><span>Visiteurs</span><span class="status-chip ${t.level}"><span class="dot"></span>${t.label}</span></div>${t.reason ? `<div class="meta" style="margin-top:4px;">${escapeHTML(t.reason)}</div>` : ''}`; })()}
           ${c.apiKey ? `<div class="api-box"><div class="line"><span>${c.apiKey.slice(0, 22)}…</span><span><span class="copy" data-action="copyKey" data-key="${c.apiKey}">Copier</span> · <span class="copy" data-action="openGuide" title="Guide d'intégration">ⓘ</span></span></div></div>` : ''}
           <div class="actions">
+            ${TRACKABLE.includes(c.type) ? `<button class="btn sm" data-action="openTracking" data-id="${c.id}">${trackingStats && trackingStats.sites.some(x => x.connectorId === c.id) ? 'Script de suivi' : 'Installer le suivi'}</button>` : ''}
             <button class="btn sm" data-action="resync" data-id="${c.id}">Resynchroniser</button>
             <button class="btn sm danger" data-action="disconnect" data-id="${c.id}">Déconnecter</button>
           </div>
@@ -2650,6 +2768,7 @@ function render() {
   renderNav();
   const main = document.getElementById('main');
   const path = currentPath();
+  if (path === 'connecteurs') loadTracking();
   const pages = { '': pageOverview, 'ventes': pageVentes, 'stock': pageStock, 'catalogue': pageCatalogue, 'sav': pageSAV, 'connecteurs': pageConnecteurs, 'facturation': pageFacturation, 'comptabilite': pageComptabilite, 'parametres': pageParametres };
   main.innerHTML = (state.emailVerified === false ? verifyEmailBannerHTML() : '') + (pages[path] || pageOverview)();
   if (path === '') {
@@ -2658,6 +2777,7 @@ function render() {
     const series = trendSeries(bounds, granularity);
     wireTrendChart(trendChartSVG(series, granularity, 'ca', 'ca').coords, granularity, 'ca', fmtEUR);
     wireTrendChart(trendChartSVG(series, granularity, 'cnt', 'count').coords, granularity, 'cnt', v => `${fmtNum(v)} vente${v !== 1 ? 's' : ''}`);
+    loadTracking();
     animateKPIs();
     animateChartDrawIn(document.getElementById('caSvg'));
     animateChartDrawIn(document.getElementById('cntSvg'));
@@ -2979,6 +3099,7 @@ document.addEventListener('click', e => {
   if (!el) return;
   const action = el.dataset.action;
 
+  if (action === 'openTracking') return openTrackingModal(el.dataset.id);
   if (action === 'flipKpi') {
     const key = el.dataset.kpi;
     flippedKpis.has(key) ? flippedKpis.delete(key) : flippedKpis.add(key);
@@ -3314,7 +3435,7 @@ document.addEventListener('click', e => {
     return;
   }
   if (action === 'copyKey') {
-    navigator.clipboard?.writeText(el.dataset.key).then(() => toast('Clé copiée.'));
+    navigator.clipboard?.writeText(el.dataset.key).then(() => toast(el.dataset.label || 'Clé copiée.'));
     return;
   }
 

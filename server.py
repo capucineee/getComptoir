@@ -27,6 +27,7 @@ import tempfile
 import threading
 import time
 import traceback
+from collections import deque
 import unicodedata
 import urllib.error
 import urllib.parse
@@ -349,6 +350,28 @@ def init_db():
             user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
             shop_domain TEXT NOT NULL,
             created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE TABLE IF NOT EXISTS tracking_sites (
+            site_key TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            connector_id TEXT NOT NULL,
+            channel_type TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            last_seen_at TEXT,
+            UNIQUE (user_id, connector_id)
+        );
+        CREATE TABLE IF NOT EXISTS tracking_stats (
+            site_key TEXT NOT NULL REFERENCES tracking_sites(site_key) ON DELETE CASCADE,
+            day TEXT NOT NULL,
+            country TEXT NOT NULL DEFAULT '',
+            source TEXT NOT NULL DEFAULT 'Direct',
+            visitors INTEGER NOT NULL DEFAULT 0,
+            views INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (site_key, day, country, source)
+        );
+        CREATE TABLE IF NOT EXISTS tracking_seen (
+            hash TEXT PRIMARY KEY,
+            day TEXT NOT NULL
         );
         CREATE TABLE IF NOT EXISTS email_verifications (
             token TEXT PRIMARY KEY,
@@ -1840,11 +1863,166 @@ def handle_woocommerce_webhook(connector_id: str, headers, raw_body: bytes):
         return {"ok": True, "ignored": True}
 
 
+# ---------------------------------------------------------------------------------------
+# Visitor tracking (cookieless). A merchant pastes one <script> on a site they control
+# (custom site, WooCommerce, Shopify); every page view is reported here. No cookie and no
+# stored identifier: a visitor is counted once per day through a hash of (IP, user agent,
+# site, day, server-side salt) kept only until the next day, then deleted — the same
+# approach as Plausible/Umami — so no consent banner is needed and nothing personal is kept.
+# Only daily aggregates (visitors/views by country and source) are stored.
+# ---------------------------------------------------------------------------------------
+TRACKING_CHANNELS = {"custom", "woocommerce", "shopify"}
+TRACK_SALT = os.environ.get("TRACK_SALT") or secrets.token_hex(16)
+_TRACK_RATE = {}
+_TRACK_RATE_LOCK = threading.Lock()
+_BOT_RE = re.compile(r"bot|crawl|spider|slurp|headless|preview|monitor|curl|wget|python-requests|facebookexternalhit", re.I)
+_TZ_COUNTRY = {
+    "Europe/Paris": "FR", "Europe/Brussels": "BE", "Europe/Zurich": "CH", "Europe/Berlin": "DE", "Europe/Madrid": "ES",
+    "Europe/Rome": "IT", "Europe/Lisbon": "PT", "Europe/London": "GB", "Europe/Amsterdam": "NL", "Europe/Luxembourg": "LU",
+    "Europe/Dublin": "IE", "Europe/Vienna": "AT", "Europe/Stockholm": "SE", "Europe/Copenhagen": "DK", "Europe/Oslo": "NO",
+    "Europe/Warsaw": "PL", "America/Toronto": "CA", "America/Montreal": "CA", "America/Vancouver": "CA",
+    "America/New_York": "US", "America/Chicago": "US", "America/Denver": "US", "America/Los_Angeles": "US",
+    "Africa/Casablanca": "MA", "Africa/Tunis": "TN", "Africa/Algiers": "DZ", "Asia/Tokyo": "JP", "Australia/Sydney": "AU",
+    "Indian/Reunion": "RE", "America/Martinique": "MQ", "America/Guadeloupe": "GP", "Pacific/Noumea": "NC",
+}
+_SEARCH = {"google": "Google", "bing": "Bing", "duckduckgo": "DuckDuckGo", "qwant": "Qwant", "ecosia": "Ecosia", "yahoo": "Yahoo"}
+_SOCIAL = {"facebook": "Facebook", "instagram": "Instagram", "tiktok": "TikTok", "pinterest": "Pinterest", "t.co": "X (Twitter)",
+           "twitter": "X (Twitter)", "linkedin": "LinkedIn", "youtube": "YouTube", "snapchat": "Snapchat", "whatsapp": "WhatsApp"}
+
+
+def _classify_source(referrer, page_url):
+    """Traffic source label: utm_source wins, else the referrer, else Direct."""
+    page_host = urllib.parse.urlparse(page_url or "").hostname or ""
+    qs = urllib.parse.parse_qs(urllib.parse.urlparse(page_url or "").query)
+    utm = (qs.get("utm_source") or [""])[0].strip().lower()
+    host = (urllib.parse.urlparse(referrer or "").hostname or "").lower()
+    if host.startswith("www."):
+        host = host[4:]
+    label = utm or host
+    if not label or (host and host == (page_host[4:] if page_host.startswith("www.") else page_host) and not utm):
+        return "Direct"
+    for table in (_SEARCH, _SOCIAL):
+        for key, name in table.items():
+            if key in label:
+                return name
+    return label[:60]
+
+
+def _visitor_country(headers, tz, lang):
+    for h in ("CF-IPCountry", "X-Vercel-IP-Country", "CloudFront-Viewer-Country", "X-Country-Code"):
+        v = (headers.get(h) or "").strip().upper()
+        if len(v) == 2 and v.isalpha() and v not in ("XX", "T1"):
+            return v
+    if tz in _TZ_COUNTRY:
+        return _TZ_COUNTRY[tz]
+    m = re.match(r"^[a-z]{2,3}[-_]([A-Za-z]{2})$", str(lang or ""))
+    return m.group(1).upper() if m else ""
+
+
+def handle_track(body, headers, client_ip):
+    """Public (no auth) — the site key is the only credential and grants write-only access
+    to that one site's counters. Always answers quietly: a tracker must never break a page."""
+    if not isinstance(body, dict):
+        return
+    site_key = str(body.get("site", ""))[:64]
+    ua = headers.get("User-Agent", "")
+    if not site_key or not ua or _BOT_RE.search(ua):
+        return
+    now = time.time()
+    with _TRACK_RATE_LOCK:
+        q = _TRACK_RATE.setdefault(client_ip, deque())
+        while q and now - q[0] > 60:
+            q.popleft()
+        if len(q) >= 60:
+            return
+        q.append(now)
+        if len(_TRACK_RATE) > 5000:
+            _TRACK_RATE.clear()
+    day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    source = _classify_source(str(body.get("ref", ""))[:500], str(body.get("url", ""))[:500])
+    country = _visitor_country(headers, str(body.get("tz", ""))[:60], str(body.get("lang", ""))[:20])
+    vhash = hashlib.sha256(f"{TRACK_SALT}|{day}|{site_key}|{client_ip}|{ua}".encode()).hexdigest()
+    conn = get_db()
+    try:
+        if not conn.execute("SELECT 1 FROM tracking_sites WHERE site_key = ?", (site_key,)).fetchone():
+            return
+        first_today = conn.execute("INSERT OR IGNORE INTO tracking_seen (hash, day) VALUES (?, ?)", (vhash, day)).rowcount > 0
+        conn.execute(
+            """INSERT INTO tracking_stats (site_key, day, country, source, visitors, views) VALUES (?, ?, ?, ?, ?, 1)
+               ON CONFLICT(site_key, day, country, source) DO UPDATE SET visitors = visitors + excluded.visitors, views = views + 1""",
+            (site_key, day, country, source, 1 if first_today else 0),
+        )
+        conn.execute("UPDATE tracking_sites SET last_seen_at = datetime('now') WHERE site_key = ?", (site_key,))
+        if secrets.randbelow(100) == 0:
+            conn.execute("DELETE FROM tracking_seen WHERE day < ?", (day,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def handle_tracking_site(token, body):
+    user = user_from_token(token)
+    if not user:
+        raise ApiError(401, "Session invalide ou expirée.")
+    connector_id = str(body.get("connectorId", "")).strip()
+    channel_type = str(body.get("channelType", "")).strip().lower()
+    if not connector_id:
+        raise ApiError(400, "Le connecteur est requis.")
+    if channel_type not in TRACKING_CHANNELS:
+        raise ApiError(400, "Le suivi des visiteurs n'est pas disponible pour ce type de canal : la plateforme n'autorise pas l'ajout d'un script.")
+    conn = get_db()
+    row = conn.execute("SELECT site_key FROM tracking_sites WHERE user_id = ? AND connector_id = ?", (user["id"], connector_id)).fetchone()
+    if row:
+        key = row["site_key"]
+    else:
+        key = "cmp_" + secrets.token_urlsafe(12)
+        conn.execute("INSERT INTO tracking_sites (site_key, user_id, connector_id, channel_type) VALUES (?, ?, ?, ?)", (key, user["id"], connector_id, channel_type))
+        conn.commit()
+    conn.close()
+    return {"siteKey": key}
+
+
+def handle_tracking_stats(token, params):
+    user = user_from_token(token)
+    if not user:
+        raise ApiError(401, "Session invalide ou expirée.")
+    date_re = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+    to_day = params.get("to") if date_re.match(params.get("to", "")) else datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    from_day = params.get("from") if date_re.match(params.get("from", "")) else (datetime.now(timezone.utc) - timedelta(days=29)).strftime("%Y-%m-%d")
+    conn = get_db()
+    sites = [dict(r) for r in conn.execute(
+        "SELECT site_key, connector_id, channel_type, last_seen_at FROM tracking_sites WHERE user_id = ?", (user["id"],))]
+    keys = [x["site_key"] for x in sites]
+    out = {"sites": [], "daily": [], "sources": [], "countries": [], "visitors": 0, "views": 0}
+    if keys:
+        ph = ",".join("?" * len(keys))
+        rng = (*keys, from_day, to_day)
+        per_site = {r["site_key"]: (r["v"], r["w"]) for r in conn.execute(
+            f"SELECT site_key, SUM(visitors) v, SUM(views) w FROM tracking_stats WHERE site_key IN ({ph}) AND day BETWEEN ? AND ? GROUP BY site_key", rng)}
+        for x in sites:
+            v, w = per_site.get(x["site_key"], (0, 0))
+            out["sites"].append({"connectorId": x["connector_id"], "channelType": x["channel_type"], "lastSeenAt": x["last_seen_at"], "visitors": v or 0, "views": w or 0})
+        out["daily"] = [{"day": r["day"], "visitors": r["v"]} for r in conn.execute(
+            f"SELECT day, SUM(visitors) v FROM tracking_stats WHERE site_key IN ({ph}) AND day BETWEEN ? AND ? GROUP BY day ORDER BY day", rng)]
+        out["sources"] = [{"source": r["source"], "visitors": r["v"]} for r in conn.execute(
+            f"SELECT source, SUM(visitors) v FROM tracking_stats WHERE site_key IN ({ph}) AND day BETWEEN ? AND ? GROUP BY source HAVING v > 0 ORDER BY v DESC LIMIT 8", rng)]
+        out["countries"] = [{"country": r["country"], "visitors": r["v"]} for r in conn.execute(
+            f"SELECT country, SUM(visitors) v FROM tracking_stats WHERE site_key IN ({ph}) AND day BETWEEN ? AND ? GROUP BY country HAVING v > 0 ORDER BY v DESC LIMIT 8", rng)]
+        out["visitors"] = sum(v for v, _ in per_site.values() if v)
+        out["views"] = sum(w for _, w in per_site.values() if w)
+    conn.close()
+    return out
+
+
 class Handler(http.server.SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=ROOT, **kwargs)
 
     def end_headers(self):
+        if getattr(self, "_track_cors", False):
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Access-Control-Allow-Methods", "POST, OPTIONS")
+            self.send_header("Access-Control-Allow-Headers", "Content-Type")
         self.send_header("Cache-Control", "no-store, no-cache, must-revalidate")
         self.send_header("Pragma", "no-cache")
         # Baseline hardening headers — cheap, safe defaults with no functional trade-off for
@@ -1888,10 +2066,35 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         except json.JSONDecodeError:
             raise ApiError(400, "Corps de requête JSON invalide.")
 
+    def _client_ip(self):
+        fwd = self.headers.get("X-Forwarded-For", "")
+        return (fwd.split(",")[0].strip() if fwd else self.client_address[0]) or "?"
+
+    def do_OPTIONS(self):
+        if urllib.parse.urlparse(self.path).path == "/api/track":
+            self._track_cors = True
+            self.send_response(204)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        self.send_error(404)
+
     def do_POST(self):
         path = urllib.parse.urlparse(self.path).path
         if not path.startswith("/api/"):
             self.send_error(404)
+            return
+        if path == "/api/track":
+            # Public beacon endpoint: cross-origin by design (it runs on the merchant's own
+            # site), replies 204 whatever happens so it can never disturb the page.
+            self._track_cors = True
+            try:
+                handle_track(self._read_json_body(), self.headers, self._client_ip())
+            except Exception:
+                pass
+            self.send_response(204)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
             return
         # Stripe's webhook needs the RAW request body to verify its signature — parsing it
         # as JSON first (like every other route below) would still work for reading the
@@ -1946,6 +2149,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 return self._send_json(200, handle_create_connector(self._bearer_token(), body))
             if path == "/api/connectors/channel":
                 return self._send_json(200, handle_connect_channel(self._bearer_token(), body))
+            if path == "/api/tracking/site":
+                return self._send_json(200, handle_tracking_site(self._bearer_token(), body))
             if path == "/api/ingest/orders":
                 return self._send_json(200, handle_ingest_order(self._bearer_token(), body))
             if path == "/api/ingest/orders/bulk":
@@ -1981,6 +2186,12 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if path == "/api/me":
             try:
                 return self._send_json(200, handle_me(self._bearer_token()))
+            except ApiError as e:
+                return self._send_json(e.status, {"error": e.message})
+        if path == "/api/tracking/stats":
+            try:
+                params = {k: v[0] for k, v in urllib.parse.parse_qs(parsed.query).items()}
+                return self._send_json(200, handle_tracking_stats(self._bearer_token(), params))
             except ApiError as e:
                 return self._send_json(e.status, {"error": e.message})
         if path == "/api/state":
