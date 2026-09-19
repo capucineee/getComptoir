@@ -1400,7 +1400,7 @@ function computeAccounting(bounds) {
   const ttc = cur.reduce((s, o) => s + o.amount, 0);
   const ht = ttc / (1 + VAT_RATE);
   const tva = ttc - ht;
-  const cost = cur.reduce((s, o) => { const p = orderProduct(o); return s + (p ? p.costPrice || 0 : 0); }, 0);
+  const cost = cur.reduce((s, o) => { const p = orderProduct(o); return s + (p ? (p.costPrice || 0) * (o.quantity || 1) : 0); }, 0);
   const margin = ht - cost;
   const marginPct = ht ? (margin / ht) * 100 : 0;
   const refundsTotal = refunded.reduce((s, o) => s + o.amount, 0);
@@ -1649,6 +1649,8 @@ function pageOverview() {
   const breakdown = channelBreakdown(bounds);
   const bestSellers = topProducts(bounds);
   const countries = countryBreakdown(bounds);
+  const acc = computeAccounting(bounds);
+  const missingCost = state.products.filter(p => !p.costPrice).length;
   const returnsCount = ordersInRange(bounds).filter(o => o.status === 'retour').length;
   const habits = computeSalesHabits();
   const alerts = stockAlerts();
@@ -1682,7 +1684,7 @@ function pageOverview() {
 
     <div class="kpis">
       ${kpiCard('ca', "Chiffre d'affaires", k.ca, 'eur', fmtEUR(k.ca), deltaHTML(k.caDelta), sparkline(series.map(s => s.ca), 'var(--brand)'),
-        `Somme des montants des <b>${fmtNum(k.sales)}</b> ventes de la période (${rangeLabel(bounds)}), <b>retours exclus</b> : <b>${fmtEUR(k.ca)}</b>.`)}
+        `Somme des montants des <b>${fmtNum(k.sales)}</b> ventes de la période (${rangeLabel(bounds)}), <b>retours exclus</b> : <b>${fmtEUR(k.ca)}</b> TTC. C'est ce que vos clients ont payé, pas ce que vous gagnez : voir « Ce qu'il vous reste » plus bas.`)}
       ${kpiCard('count', 'Commandes', k.count, 'num', fmtNum(k.count), deltaHTML(k.countDelta), sparkline(series.map(s => s.count), 'var(--brand)'),
         `Nombre de commandes reçues sur la période (${rangeLabel(bounds)}), tous statuts confondus, retours inclus (c'est ce qui sert de base au taux de retour).`)}
       ${kpiCard('panier', 'Panier moyen', k.panier, 'eur', fmtEUR(k.panier), deltaHTML(k.panierDelta), sparkline(series.map(s => s.sales ? s.ca / s.sales : 0), 'var(--brand)'),
@@ -1691,6 +1693,34 @@ function pageOverview() {
         `Commandes au statut « Retour » ÷ toutes les commandes : ${fmtNum(returnsCount)} ÷ ${fmtNum(k.count)} = <b>${k.tauxRetour.toFixed(1)}%</b>.`)}
     </div>
 
+    <div class="section-head"><h2>Ce que vous gagnez</h2><span>Du chiffre d'affaires au bénéfice</span></div>
+    <div class="card" style="margin-bottom:14px;">
+      <h2>Ce qu'il vous reste ${howBtn('gain')}</h2>
+      ${howBox('gain', "Le chiffre d'affaires n'est pas votre gain : c'est ce que les clients ont payé (TTC). Il faut en retirer la TVA (estimée à 20 %), le coût d'achat des produits vendus (quantité comprise) et vos charges (abonnements, publicité, emballages…). Les commandes en retour sont exclues. Les frais de plateforme, de paiement et de port ne sont pas encore pris en compte.")}
+      <div class="card-sub">${rangeLabel(bounds)} · estimation simplifiée, ne remplace pas votre comptable</div>
+      ${(() => {
+        const base = acc.ttc || 1;
+        const row = (label, value, sign, color, note) => `
+          <div class="chan-row">
+            <div class="top"><span>${label}${note ? ` <span style="color:var(--ink-faint);font-size:12px">· ${note}</span>` : ''}</span><span class="pct" style="color:${color === 'var(--critical)' ? 'var(--critical)' : 'inherit'}">${sign}${fmtEUR(Math.abs(value))}</span></div>
+            <div class="chan-bar"><div style="width:${Math.min(100, Math.abs(value) / base * 100)}%; background:${color}"></div></div>
+          </div>`;
+        const keep = acc.ttc ? (acc.netProfit / acc.ttc) * 100 : 0;
+        return `
+        <div style="display:flex; align-items:baseline; gap:14px; flex-wrap:wrap; margin:6px 0 16px;">
+          <span style="font-family:var(--font-mono); font-size:30px; font-weight:600; font-variant-numeric:tabular-nums; color:${acc.netProfit >= 0 ? 'inherit' : 'var(--critical)'};">${fmtEUR(acc.netProfit)}</span>
+          <span style="color:var(--ink-soft); font-size:13px;">${acc.ttc ? `bénéfice net · sur 100 € encaissés, il vous reste <b style="font-family:var(--font-mono)">${keep.toFixed(0)} €</b>` : 'bénéfice net'}</span>
+        </div>
+        ${row('Ventes encaissées (TTC)', acc.ttc, '', 'var(--brand)', `${fmtNum(k.sales)} vente${k.sales !== 1 ? 's' : ''}, retours exclus`)}
+        ${row('TVA à reverser', acc.tva, '− ', 'var(--critical)', 'estimée à 20 %')}
+        ${row("Coût d'achat des produits vendus", acc.cost, '− ', 'var(--critical)', '')}
+        ${row('Charges', acc.expensesTotal, '− ', 'var(--critical)', acc.expenses.length ? `${acc.expenses.length} charge${acc.expenses.length !== 1 ? 's' : ''}` : 'aucune renseignée')}
+        ${missingCost ? `<div class="callout" style="margin-top:12px;">${missingCost} produit${missingCost !== 1 ? 's' : ''} sans coût d'achat : ils comptent pour 0 €, donc le bénéfice est surestimé. <a href="#catalogue" style="color:var(--brand)">Compléter dans Mon catalogue →</a></div>` : ''}
+        ${!acc.expenses.length ? `<div class="card-sub" style="margin-top:12px;">Ajoutez vos charges dans <a href="#comptabilite" style="color:var(--brand)">Comptabilité</a> pour un bénéfice réaliste.</div>` : `<div class="card-sub" style="margin-top:12px;"><a href="#comptabilite" style="color:var(--brand)">Voir le détail en Comptabilité →</a></div>`}`;
+      })()}
+    </div>
+
+    <div class="section-head"><h2>À traiter</h2><span>Dernières commandes et stocks à surveiller</span></div>
     <div class="grid">
       <div class="card">
         <h2>Commandes récentes</h2>
@@ -1712,6 +1742,7 @@ function pageOverview() {
       </div>
     </div>
 
+    <div class="section-head"><h2>Vos ventes en détail</h2><span>Quoi, où et par quel canal</span></div>
     <div class="grid">
       <div class="card">
         <h2>Produits les plus vendus ${howBtn('produits')}</h2>
@@ -1751,6 +1782,7 @@ function pageOverview() {
       ${countries.length && countries.every(c => c.code === null) ? `<div class="card-sub" style="margin-top:10px;">Aucun pays reçu pour l'instant — le site doit envoyer un champ <code>country</code> avec ses commandes.</div>` : ''}
     </div>
 
+    <div class="section-head"><h2>Évolution</h2><span>Le rythme de vos ventes dans le temps</span></div>
     <div class="card" style="margin-bottom:14px;">
       <h2>Chiffre d'affaires — ${rangeLabel(bounds)}</h2>
       <div class="card-sub">Tous canaux confondus</div>
@@ -1763,6 +1795,7 @@ function pageOverview() {
       <div class="chart-wrap" id="cntWrap">${cntChart.svg}<div class="tooltip" id="cntTooltip"></div></div>
     </div>
 
+    <div class="section-head"><h2>Habitudes</h2><span>Ce qui se répète sur tout votre historique</span></div>
     <div class="card" style="margin-bottom:14px;">
       <h2>Habitudes de vente</h2>
       ${habits ? `

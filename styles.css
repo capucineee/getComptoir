@@ -365,3 +365,7 @@ table.data tbody tr.row-incomplete:hover { filter: brightness(0.97); }
 .tl-title { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .tl-src { font-size: 11px; color: var(--ink-faint); }
 .tl-date { font-size: 12px; color: var(--ink-faint); margin-top: 3px; font-family: var(--font-mono); }
+
+.section-head { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin: 26px 0 10px; padding-bottom: 8px; border-bottom: 1px solid var(--rule-soft); }
+.section-head h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--ink-soft); margin: 0; font-weight: 700; }
+.section-head span { font-size: 12px; color: var(--ink-faint); }
