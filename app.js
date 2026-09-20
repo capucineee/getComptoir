@@ -1197,7 +1197,7 @@ window.addEventListener('hashchange', render);
 function connectedTypes() { return state.connectors.filter(c => c.status === 'connected'); }
 function connectorLabel(type) {
   const c = state.connectors.find(c => c.type === type);
-  return c ? c.label : (CHANNEL_META[type] ? CHANNEL_META[type].label : type);
+  return escapeHTML(c ? c.label : (CHANNEL_META[type] ? CHANNEL_META[type].label : type));
 }
 function channelColor(type) { return CHANNEL_META[type] ? CHANNEL_META[type].color : 'var(--ink-faint)'; }
 
@@ -2135,7 +2135,7 @@ function pageVentes() {
         <input type="text" placeholder="Rechercher une cliente ou un numéro" id="salesSearch" value="${salesFilter.q}">
         <select id="salesChannel">
           <option value="all">Tous les canaux</option>
-          ${connectedTypes().map(c => `<option value="${c.type}" ${salesFilter.channel === c.type ? 'selected' : ''}>${c.label}</option>`).join('')}
+          ${connectedTypes().map(c => `<option value="${escapeHTML(c.type)}" ${salesFilter.channel === c.type ? 'selected' : ''}>${escapeHTML(c.label)}</option>`).join('')}
         </select>
         <select id="salesStatus">
           <option value="all" ${salesFilter.status === 'all' ? 'selected' : ''}>Tous les statuts</option>
@@ -2149,7 +2149,7 @@ function pageVentes() {
       ${list.length ? `<div class="table-scroll"><table class="data table-cards">
         <thead><tr>
           <th>Commande</th><th>Canal</th><th>Cliente</th><th>Pays</th><th>Produit</th><th>Date</th><th style="text-align:right">Montant</th><th>Statut</th>
-          ${state.customFields.map(f => `<th>${f.label}<span class="field-remove" data-action="removeField" data-id="${f.id}" title="Retirer ce champ">×</span><span class="field-source">${fieldSourceLabel(f)}</span></th>`).join('')}
+          ${state.customFields.map(f => `<th>${escapeHTML(f.label)}<span class="field-remove" data-action="removeField" data-id="${f.id}" title="Retirer ce champ">×</span><span class="field-source">${fieldSourceLabel(f)}</span></th>`).join('')}
           <th><button class="btn sm" data-action="openAddField">+ Champ</button></th>
         </tr></thead>
         <tbody>${list.map(o => ventesOrderRow(o)).join('')}</tbody>
@@ -2540,7 +2540,7 @@ function openAddExpenseModal() {
 function savTableHead() {
   return `<tr>
     <th>Commande</th><th>Canal</th><th>Produit</th><th>Motif</th><th>Date</th><th>Statut</th>
-    ${state.savFields.map(f => `<th>${f.label}<span class="field-remove" data-action="removeSavField" data-id="${f.id}" title="Retirer ce champ">×</span><span class="field-source">${fieldSourceLabel(f)}</span></th>`).join('')}
+    ${state.savFields.map(f => `<th>${escapeHTML(f.label)}<span class="field-remove" data-action="removeSavField" data-id="${f.id}" title="Retirer ce champ">×</span><span class="field-source">${fieldSourceLabel(f)}</span></th>`).join('')}
     <th></th>
   </tr>`;
 }
@@ -2608,7 +2608,7 @@ function pageConnecteurs() {
         <div class="conn-card">
           <div class="head">
             <div class="ico" style="background:${channelColor(c.type)}">${CHANNEL_META[c.type]?.initials ?? '?'}</div>
-            <div><div class="name">${c.label}</div><div class="meta">Connecté le ${fmtDate(c.connectedAt)}</div></div>
+            <div><div class="name">${escapeHTML(c.label)}</div><div class="meta">Connecté le ${fmtDate(c.connectedAt)}</div></div>
             ${connectorGuideButton(c.type)}
           </div>
           <div class="meta">Dernière commande reçue : ${lastOrder ? fmtDateTime(lastOrder) : 'Aucune pour l\'instant'}</div>
@@ -2897,6 +2897,14 @@ function pageParametres() {
         <a href="/mentions-legales.html" target="_blank" style="color:var(--brand); font-size:13.5px;">Mentions légales →</a>
       </div>
     </div>
+    <div class="card" style="margin-top:14px;">
+      <h2>Mes données ${help("Conformément au RGPD, vous pouvez récupérer toutes les données de votre compte, ou le supprimer définitivement. La suppression efface vos commandes, produits, connecteurs et clés, et résilie votre abonnement. Les factures restent conservées chez Stripe pour les obligations comptables, et les sauvegardes chiffrées disparaissent à leur rotation.")}</h2>
+      <div class="card-sub">Export de vos données ou suppression de votre compte.</div>
+      <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:10px;">
+        <button class="btn" data-action="exportMyData">Exporter mes données (JSON)</button>
+        <button class="btn danger" data-action="openDeleteAccount">Supprimer mon compte</button>
+      </div>
+    </div>
   `;
 }
 
@@ -2998,7 +3006,7 @@ function openAddProductModal() {
       <div class="field"><label>Seuil d'alerte</label><input type="number" id="pThreshold" min="0" value="10"></div>
     </div>
     <div class="field"><label>Coût d'achat (HT, par unité)</label><input type="number" id="pCost" min="0" step="0.01" value="0"></div>
-    <div class="field"><label>Canal</label><select id="pChannel">${connectedTypes().map(c => `<option value="${c.type}">${c.label}</option>`).join('')}</select></div>
+    <div class="field"><label>Canal</label><select id="pChannel">${connectedTypes().map(c => `<option value="${escapeHTML(c.type)}">${escapeHTML(c.label)}</option>`).join('')}</select></div>
     <div class="actions"><button class="btn" data-action="closeModal">Annuler</button><button class="btn primary" data-action="submitAddProduct">Ajouter</button></div>
   `);
 }
@@ -3126,7 +3134,7 @@ function openFieldPickerModal(catalog, existingFields, submitAction) {
     <div class="field">
       <label>Champ</label>
       <select id="fieldPick">
-        ${groups.map(g => `<optgroup label="${g.label}">${g.options.map(o => `<option value="${o.value}">${o.text}</option>`).join('')}</optgroup>`).join('')}
+        ${groups.map(g => `<optgroup label="${escapeHTML(g.label)}">${g.options.map(o => `<option value="${escapeHTML(o.value)}">${escapeHTML(o.text)}</option>`).join('')}</optgroup>`).join('')}
       </select>
     </div>
     <div class="actions"><button class="btn" data-action="closeModal">Annuler</button><button class="btn primary" data-action="${submitAction}">Ajouter</button></div>
@@ -3161,7 +3169,7 @@ function openAddSavFieldModal() { openFieldPickerModal(SAV_FIELD_CATALOG, state.
 function fieldSourceLabel(f) {
   if (f.source === 'manual') return 'Saisie manuelle';
   const c = state.connectors.find(c => c.id === f.source);
-  return c ? `Synchronisé · ${c.label}` : 'Source inconnue';
+  return c ? `Synchronisé · ${escapeHTML(c.label)}` : 'Source inconnue';
 }
 function openOrderDetailModal(orderId) {
   const o = state.orders.find(o => o.id === orderId);
@@ -3259,7 +3267,7 @@ function openOrderDetailModal(orderId) {
         const val = escapeHTML((synced ? o.custom[f.key] : o.custom[f.id]) || '');
         return `
         <div class="custom-field-row">
-          <label>${f.label}<span class="field-source-tag">${fieldSourceLabel(f)}</span></label>
+          <label>${escapeHTML(f.label)}<span class="field-source-tag">${fieldSourceLabel(f)}</span></label>
           <input type="text" data-field-id="${f.id}" value="${val}" ${synced ? 'disabled placeholder="Rempli automatiquement à la prochaine synchro"' : ''}>
         </div>`;
       }).join('') : `<div class="card-sub" style="margin-bottom:12px;">Aucun champ pour l'instant.</div>`}
@@ -3303,7 +3311,7 @@ function openTicketDetailModal(ticketId) {
         const val = t.custom[f.id] ? escapeHTML(t.custom[f.id]) : '';
         return `
         <div class="custom-field-row">
-          <label>${f.label}<span class="field-source-tag">${fieldSourceLabel(f)}</span><span class="field-remove" data-action="removeSavField" data-id="${f.id}" title="Retirer ce champ">×</span></label>
+          <label>${escapeHTML(f.label)}<span class="field-source-tag">${fieldSourceLabel(f)}</span><span class="field-remove" data-action="removeSavField" data-id="${f.id}" title="Retirer ce champ">×</span></label>
           <input type="text" data-sav-field-id="${f.id}" value="${val}" ${synced ? 'disabled placeholder="Rempli automatiquement à la prochaine synchro"' : ''}>
         </div>`;
       }).join('') : `<div class="card-sub" style="margin-bottom:12px;">Aucun champ pour l'instant — ajoutez ceux dont vous avez besoin.</div>`}
@@ -3345,6 +3353,43 @@ document.addEventListener('click', e => {
     return;
   }
   if (action === 'setShipSort') { setState({ shipSort: el.dataset.sort === 'desc' ? 'desc' : 'asc' }); return; }
+  if (action === 'exportMyData') {
+    const session = getSession();
+    if (!session) return;
+    apiRequest('/api/account/export', { token: session.token }).then(data => {
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `comptoir-mes-donnees-${new Date().toISOString().slice(0, 10)}.json`;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+      toast('Export téléchargé.');
+    }).catch(err => toast(err.message, true));
+    return;
+  }
+  if (action === 'openDeleteAccount') {
+    openModal(`
+      <h3>Supprimer mon compte</h3>
+      <div class="modal-sub">Cette action est définitive : vos commandes, produits, connecteurs, clés API et statistiques sont effacés, et votre abonnement est résilié. Pensez à exporter vos données avant.</div>
+      <div class="field"><label>Mot de passe (pour confirmer)</label><input type="password" id="deletePassword" autocomplete="current-password"></div>
+      <div class="actions"><button class="btn" data-action="closeModal">Annuler</button><button class="btn danger" data-action="confirmDeleteAccount">Supprimer définitivement</button></div>
+    `);
+    return;
+  }
+  if (action === 'confirmDeleteAccount') {
+    const session = getSession();
+    const password = document.getElementById('deletePassword').value;
+    if (!password) return toast('Saisissez votre mot de passe.', true);
+    apiRequest('/api/account', { method: 'DELETE', token: session.token, body: { password } }).then(() => {
+      closeModal();
+      clearSession();
+      localStorage.removeItem(STORAGE_KEY);
+      location.hash = '';
+      renderAuth('login');
+      toast('Votre compte a été supprimé.');
+    }).catch(err => toast(err.message, true));
+    return;
+  }
   if (action === 'openTracking') return openTrackingModal(el.dataset.id);
   if (action === 'flipKpi') {
     const key = el.dataset.kpi;

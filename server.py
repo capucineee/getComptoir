@@ -293,9 +293,15 @@ def verify_shopify_webhook_hmac(raw_body: bytes, hmac_header: str | None) -> boo
 
 
 def get_db():
-    conn = sqlite3.connect(DB_PATH)
+    # timeout + busy_timeout: several threads write (ingestion, tracking beacons, state
+    # saves) — wait for a lock instead of failing with "database is locked". WAL lets
+    # readers proceed during a write and is much friendlier to concurrent requests.
+    conn = sqlite3.connect(DB_PATH, timeout=15)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute("PRAGMA busy_timeout = 15000")
+    conn.execute("PRAGMA journal_mode = WAL")
+    conn.execute("PRAGMA synchronous = NORMAL")
     return conn
 
 
@@ -811,6 +817,7 @@ def handle_me(token):
 # larger project of designing and migrating a full relational schema up front. That
 # normalization is the natural next step once the product needs cross-user querying
 # (e.g. the admin/monitoring view from the technical plan) rather than per-user storage.
+MAX_BODY_BYTES = 5_000_000  # hard cap on any request body, checked before it is read
 MAX_STATE_BYTES = 2_000_000  # 2 MB — generous for this app's data, cheap to guard.
 
 
@@ -1081,12 +1088,16 @@ def _extract_extra_fields(body: dict) -> dict:
     for k, v in body.items():
         if len(extra) >= MAX_EXTRA_FIELDS_PER_ORDER:
             break
-        if str(k).strip().lower() in _CONSUMED_FIELD_KEYS:
+        # Keys become column names in the merchant's dashboard: keep them plain text (no
+        # markup characters, bounded length) so a hostile or sloppy payload can't inject
+        # HTML into the UI, and values are bounded so they can't bloat the account's state.
+        key = re.sub(r"[<>\"'`&\x00-\x1f]", "", str(k)).strip()[:60]
+        if not key or key.lower() in _CONSUMED_FIELD_KEYS:
             continue
         if isinstance(v, bool) or isinstance(v, (int, float)):
-            extra[str(k)] = str(v)
+            extra[key] = str(v)
         elif isinstance(v, str) and v.strip():
-            extra[str(k)] = v.strip()
+            extra[key] = v.strip()[:300]
     return extra
 
 
@@ -2046,6 +2057,100 @@ def handle_tracking_stats(token, params):
     return out
 
 
+# ---------------------------------------------------------------------------------------
+# Account rights (RGPD): export everything held about an account, and delete it.
+# ---------------------------------------------------------------------------------------
+def handle_account_export(token):
+    user = user_from_token(token)
+    if not user:
+        raise ApiError(401, "Session invalide ou expirée.")
+    conn = get_db()
+    row = conn.execute(
+        "SELECT email, created_at, consent_version, consent_accepted_at, plan_tier, plan_status, plan_renews_at, email_verified_at FROM users WHERE id = ?",
+        (user["id"],),
+    ).fetchone()
+    state_row = conn.execute("SELECT data FROM app_state WHERE user_id = ?", (user["id"],)).fetchone()
+    connectors = [dict(r) for r in conn.execute(
+        "SELECT connector_id, label, channel_type, created_at FROM api_keys WHERE user_id = ?", (user["id"],))]
+    channels = [dict(r) for r in conn.execute(
+        "SELECT channel_type, connected_at FROM connected_channels WHERE user_id = ?", (user["id"],))]
+    sites = [dict(r) for r in conn.execute(
+        "SELECT connector_id, channel_type, created_at, last_seen_at FROM tracking_sites WHERE user_id = ?", (user["id"],))]
+    conn.close()
+    try:
+        state = json.loads(state_row["data"]) if state_row else None
+    except json.JSONDecodeError:
+        state = None
+    if isinstance(state, dict):
+        # Secrets stay out of the export: an API key is a credential, not the user's data.
+        for c in state.get("connectors", []) or []:
+            if isinstance(c, dict):
+                c.pop("apiKey", None)
+    return {
+        "exportedAt": datetime.now(timezone.utc).isoformat(),
+        "account": dict(row) if row else {},
+        "connectors": connectors,
+        "channels": channels,
+        "trackingSites": sites,
+        "data": state,
+    }
+
+
+def handle_account_delete(token, body):
+    user = user_from_token(token)
+    if not user:
+        raise ApiError(401, "Session invalide ou expirée.")
+    password = body.get("password") if isinstance(body, dict) else None
+    if not isinstance(password, str) or not password:
+        raise ApiError(400, "Saisissez votre mot de passe pour confirmer la suppression.")
+    conn = get_db()
+    row = conn.execute(
+        "SELECT password_hash, password_salt, stripe_subscription_id FROM users WHERE id = ?", (user["id"],)
+    ).fetchone()
+    if not row or not verify_password(password, row["password_hash"], row["password_salt"]):
+        conn.close()
+        raise ApiError(403, "Mot de passe incorrect.")
+    # A live subscription must be cancelled BEFORE the account disappears — otherwise the
+    # customer would keep being billed for something they can no longer reach.
+    if row["stripe_subscription_id"] and STRIPE_SECRET_KEY:
+        try:
+            stripe_request("DELETE", f"/subscriptions/{row['stripe_subscription_id']}")
+        except ApiError as e:
+            if e.status != 404:
+                conn.close()
+                raise ApiError(502, "Impossible de résilier votre abonnement pour l'instant : le compte n'a pas été supprimé. Réessayez dans un instant ou contactez-nous.")
+    # Every table that holds account data references users(id) ON DELETE CASCADE.
+    conn.execute("DELETE FROM users WHERE id = ?", (user["id"],))
+    conn.commit()
+    conn.close()
+    return {"ok": True}
+
+
+def handle_health():
+    """Cheap liveness/readiness probe for an uptime monitor: the database answers, and the
+    backup job's last outcome is visible (without any credential)."""
+    try:
+        conn = get_db()
+        conn.execute("SELECT 1").fetchone()
+        conn.close()
+    except Exception:
+        return 503, {"ok": False, "db": False}
+    configured = bool(R2_ACCOUNT_ID and R2_ACCESS_KEY_ID and R2_SECRET_ACCESS_KEY and R2_BUCKET_NAME)
+    last = BACKUP_STATE.get("lastSuccessAt")
+    stale = bool(last) and (time.time() - BACKUP_STATE["lastSuccessEpoch"]) > BACKUP_INTERVAL_SECONDS * 2.5
+    if not configured:
+        status = "not_configured"
+    elif BACKUP_STATE.get("lastError") and not last:
+        status = "failing"
+    elif stale or BACKUP_STATE.get("lastError"):
+        status = "stale"
+    elif last:
+        status = "ok"
+    else:
+        status = "pending"
+    return 200, {"ok": True, "db": True, "backup": {"status": status, "lastSuccessAt": last, "lastError": BACKUP_STATE.get("lastError")}}
+
+
 class Handler(http.server.SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=ROOT, **kwargs)
@@ -2088,8 +2193,17 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         traceback.print_exc(file=sys.stderr)
         self._send_json(500, {"error": "Erreur serveur — réessayez dans un instant."})
 
+    def _body_length(self):
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+        except ValueError:
+            raise ApiError(400, "En-tête Content-Length invalide.")
+        if length < 0 or length > MAX_BODY_BYTES:
+            raise ApiError(413, "Requête trop volumineuse.")
+        return length
+
     def _read_json_body(self):
-        length = int(self.headers.get("Content-Length", 0))
+        length = self._body_length()
         if length == 0:
             return {}
         raw = self.rfile.read(length)
@@ -2097,6 +2211,18 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return json.loads(raw or b"{}")
         except json.JSONDecodeError:
             raise ApiError(400, "Corps de requête JSON invalide.")
+
+    def _redirect_www(self):
+        """www.getcomptoir.fr -> getcomptoir.fr (301), so one canonical address serves the
+        app and search engines don't index two copies of the site."""
+        host = (self.headers.get("Host") or "").split(":")[0].lower()
+        if host.startswith("www."):
+            self.send_response(301)
+            self.send_header("Location", f"https://{host[4:]}{self.path}")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return True
+        return False
 
     def _client_ip(self):
         fwd = self.headers.get("X-Forwarded-For", "")
@@ -2112,6 +2238,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.send_error(404)
 
     def do_POST(self):
+        if self._redirect_www():
+            return
         path = urllib.parse.urlparse(self.path).path
         if not path.startswith("/api/"):
             self.send_error(404)
@@ -2134,7 +2262,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         # route reads and verifies before any JSON parsing happens.
         if path == "/api/stripe/webhook":
             try:
-                length = int(self.headers.get("Content-Length", 0))
+                length = self._body_length()
                 raw = self.rfile.read(length) if length else b""
                 return self._send_json(200, handle_stripe_webhook(raw, self.headers.get("Stripe-Signature")))
             except ApiError as e:
@@ -2144,7 +2272,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         # Same reasoning as Stripe's webhook above — Shopify signs the exact raw bytes.
         if path == "/api/connectors/shopify/webhook":
             try:
-                length = int(self.headers.get("Content-Length", 0))
+                length = self._body_length()
                 raw = self.rfile.read(length) if length else b""
                 return self._send_json(200, handle_shopify_webhook(self.headers, raw))
             except ApiError as e:
@@ -2154,7 +2282,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         woo_webhook_match = re.match(r"^/api/connectors/woocommerce/webhook/([^/]+)$", path)
         if woo_webhook_match:
             try:
-                length = int(self.headers.get("Content-Length", 0))
+                length = self._body_length()
                 raw = self.rfile.read(length) if length else b""
                 return self._send_json(200, handle_woocommerce_webhook(woo_webhook_match.group(1), self.headers, raw))
             except ApiError as e:
@@ -2202,6 +2330,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self._send_server_error(e)
 
     def do_GET(self):
+        if self._redirect_www():
+            return
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path
         if path == "/api/connectors/shopify/callback":
@@ -2220,6 +2350,14 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 return self._send_json(200, handle_me(self._bearer_token()))
             except ApiError as e:
                 return self._send_json(e.status, {"error": e.message})
+        if path == "/api/health":
+            status, payload = handle_health()
+            return self._send_json(status, payload)
+        if path == "/api/account/export":
+            try:
+                return self._send_json(200, handle_account_export(self._bearer_token()))
+            except ApiError as e:
+                return self._send_json(e.status, {"error": e.message})
         if path == "/api/tracking/stats":
             try:
                 params = {k: v[0] for k, v in urllib.parse.parse_qs(parsed.query).items()}
@@ -2236,6 +2374,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         return super().do_GET()
 
     def do_HEAD(self):
+        if self._redirect_www():
+            return
         if not self._static_allowed():
             return self.send_error(404)
         return super().do_HEAD()
@@ -2253,7 +2393,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return False
         fs_path = self.translate_path(self.path)
         if os.path.isdir(fs_path):
-            return True
+            # A directory is only served through its index page — never as a file listing.
+            return os.path.exists(os.path.join(fs_path, "index.html"))
         name = os.path.basename(fs_path).lower()
         if name in self._PRIVATE_NAMES:
             return False
@@ -2275,6 +2416,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     def do_DELETE(self):
         path = urllib.parse.urlparse(self.path).path
         try:
+            if path == "/api/account":
+                return self._send_json(200, handle_account_delete(self._bearer_token(), self._read_json_body()))
             channel_match = re.match(r"^/api/connectors/channel/([^/]+)$", path)
             if channel_match:
                 return self._send_json(200, handle_disconnect_channel(self._bearer_token(), channel_match.group(1)))
@@ -2344,6 +2487,9 @@ def _r2_put_object(key: str, data: bytes, content_type: str) -> None:
         resp.read()
 
 
+BACKUP_STATE = {"lastSuccessAt": None, "lastSuccessEpoch": 0, "lastError": None}
+
+
 def _run_backup_once():
     if not (R2_ACCOUNT_ID and R2_ACCESS_KEY_ID and R2_SECRET_ACCESS_KEY and R2_BUCKET_NAME):
         print("[sauvegarde ignorée — R2 non configuré]", file=sys.stderr)
@@ -2360,13 +2506,20 @@ def _run_backup_once():
         with dst:
             src.backup(dst)
         src.close()
+        # A backup that can't be opened is worse than none (false comfort) — check the
+        # snapshot's own integrity before it replaces anything or leaves the machine.
+        check = dst.execute("PRAGMA integrity_check").fetchone()[0]
         dst.close()
+        if check != "ok":
+            raise RuntimeError(f"Snapshot SQLite corrompu : {check}")
         with open(tmp_path, "rb") as f:
             compressed = gzip.compress(f.read())
         key = "backups/comptoir-" + datetime.now(timezone.utc).strftime("%Y-%m-%d-%H%M%S") + ".db.gz"
         _r2_put_object(key, compressed, "application/gzip")
+        BACKUP_STATE.update(lastSuccessAt=datetime.now(timezone.utc).isoformat(), lastSuccessEpoch=time.time(), lastError=None)
         print(f"[sauvegarde OK] {key} ({len(compressed)} octets)", file=sys.stderr)
-    except Exception:
+    except Exception as e:
+        BACKUP_STATE["lastError"] = f"{type(e).__name__}: {str(e)[:160]}"
         # A failed backup should never take the server down with it — log it loudly and
         # try again at the next interval.
         traceback.print_exc(file=sys.stderr)
