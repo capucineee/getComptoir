@@ -1727,12 +1727,12 @@ function pageTrafic() {
     const cv = site && site.visitors && s2 != null ? `${((s2 / site.visitors) * 100).toFixed(1)}%` : '—';
     return `<tr>
       <td>${escapeHTML(c.label)}</td>
-      <td><span class="status-chip ${t.level}"><span class="dot"></span>${t.label}</span></td>
-      <td class="amount">${site ? fmtNum(site.visitors) : '—'}</td>
-      <td class="amount">${site ? fmtNum(site.views) : '—'}</td>
-      <td class="amount">${s2 != null ? fmtNum(s2) : '—'}</td>
-      <td class="amount">${cv}</td>
-      <td><button class="btn sm" data-action="openTracking" data-id="${c.id}">${site ? 'Script' : 'Installer'}</button></td>
+      <td data-label="Statut"><span class="status-chip ${t.level}"><span class="dot"></span>${t.label}</span></td>
+      <td class="amount" data-label="Visiteurs">${site ? fmtNum(site.visitors) : '—'}</td>
+      <td class="amount" data-label="Pages vues">${site ? fmtNum(site.views) : '—'}</td>
+      <td class="amount" data-label="Ventes">${s2 != null ? fmtNum(s2) : '—'}</td>
+      <td class="amount" data-label="Conversion">${cv}</td>
+      <td data-label=""><button class="btn sm" data-action="openTracking" data-id="${c.id}">${site ? 'Script' : 'Installer'}</button></td>
     </tr>`;
   }).join('');
 
@@ -1789,7 +1789,7 @@ function pageTrafic() {
     <div class="grid">
       <div class="card">
         <h2>Sites suivis ${help("Conversion d'un site = ses ventes (retours exclus) ÷ ses visiteurs. Elle n'est affichée que si ce type de plateforme n'est connecté qu'une seule fois, sinon les ventes ne peuvent pas être attribuées avec certitude à un site précis.")}</h2>
-        ${perSite ? `<div class="table-scroll"><table class="data"><thead><tr><th>Site</th><th>Statut</th><th style="text-align:right">Visiteurs</th><th style="text-align:right">Pages vues</th><th style="text-align:right">Ventes</th><th style="text-align:right">Conversion</th><th></th></tr></thead><tbody>${perSite}</tbody></table></div>` : `<div class="empty">Aucun site suivi possible : connectez Shopify, WooCommerce ou un site personnalisé.</div>`}
+        ${perSite ? `<div class="table-scroll"><table class="data table-cards"><thead><tr><th>Site</th><th>Statut</th><th style="text-align:right">Visiteurs</th><th style="text-align:right">Pages vues</th><th style="text-align:right">Ventes</th><th style="text-align:right">Conversion</th><th></th></tr></thead><tbody>${perSite}</tbody></table></div>` : `<div class="empty">Aucun site suivi possible : connectez Shopify, WooCommerce ou un site personnalisé.</div>`}
       </div>
       <div class="card">
         <h2>Couverture du suivi ${help("Le suivi ne peut exister que là où vous contrôlez le site et pouvez y ajouter un script. Etsy, Instagram Shop et TikTok Shop l'interdisent : Comptoir n'y voit que les ventes.")}</h2>
@@ -1908,7 +1908,7 @@ function pageOverview() {
       <div class="card">
         <h2>Commandes récentes</h2>
         <div class="card-sub">Tous canaux</div>
-        <table class="data">
+        <table class="data table-cards">
           <thead><tr><th>Commande</th><th>Canal</th><th>Cliente</th><th style="text-align:right">Montant</th><th>Statut</th></tr></thead>
           <tbody>${recent.map(o => orderRow(o)).join('')}</tbody>
         </table>
@@ -2094,11 +2094,11 @@ function orderRow(o, withDate) {
   const [cls, label] = statusMeta(o.status);
   return `<tr>
     <td>${orderDisplayRef(o)}</td>
-    <td><span class="chan-dot"><span class="sw" style="background:${channelColor(o.channelType)}"></span>${connectorLabel(o.channelType)}</span></td>
-    <td>${flagHTML(o)}${escapeHTML(o.customer)}</td>
-    ${withDate ? `<td>${fmtDate(o.date)}</td>` : ''}
-    <td class="amount">${fmtEUR(o.amount)}</td>
-    <td><span class="status-chip ${cls}"><span class="dot"></span>${label}</span></td>
+    <td data-label="Canal"><span class="chan-dot"><span class="sw" style="background:${channelColor(o.channelType)}"></span>${connectorLabel(o.channelType)}</span></td>
+    <td data-label="Cliente"><span>${flagHTML(o)}${escapeHTML(o.customer)}</span></td>
+    ${withDate ? `<td data-label="Date">${fmtDate(o.date)}</td>` : ''}
+    <td class="amount" data-label="Montant">${fmtEUR(o.amount)}</td>
+    <td data-label="Statut"><span class="status-chip ${cls}"><span class="dot"></span>${label}</span></td>
   </tr>`;
 }
 function themeToggleHTML() {
@@ -2146,7 +2146,7 @@ function pageVentes() {
         </select>
         <span class="count">${fmtNum(matchCount)} résultat${matchCount > 1 ? 's' : ''}${truncated ? ' · 120 affichés' : ''}</span>
       </div>
-      ${list.length ? `<div class="table-scroll"><table class="data">
+      ${list.length ? `<div class="table-scroll"><table class="data table-cards">
         <thead><tr>
           <th>Commande</th><th>Canal</th><th>Cliente</th><th>Pays</th><th>Produit</th><th>Date</th><th style="text-align:right">Montant</th><th>Statut</th>
           ${state.customFields.map(f => `<th>${f.label}<span class="field-remove" data-action="removeField" data-id="${f.id}" title="Retirer ce champ">×</span><span class="field-source">${fieldSourceLabel(f)}</span></th>`).join('')}
@@ -2162,14 +2162,14 @@ function ventesOrderRow(o) {
   const product = state.products.find(p => p.id === o.productId);
   return `<tr data-action="openOrderDetail" data-id="${o.id}" class="row-click" role="button" tabindex="0">
     <td>${orderDisplayRef(o)}</td>
-    <td><span class="chan-dot"><span class="sw" style="background:${channelColor(o.channelType)}"></span>${connectorLabel(o.channelType)}</span></td>
-    <td>${escapeHTML(o.customer)}</td>
-    <td style="white-space:nowrap">${o.country ? `${flagEmoji(o.country)} <span style="color:var(--ink-faint);font-size:12px" title="${escapeHTML(countryName(o.country))}">${escapeHTML(o.country.toUpperCase())}</span>` : '<span style="color:var(--ink-faint)" title="Pays non transmis par le site">—</span>'}</td>
-    <td>${product ? escapeHTML(product.name) : '<span style="color:var(--ink-faint)">—</span>'}</td>
-    <td style="white-space:nowrap">${String(o.date).length <= 10 ? fmtDate(o.date) : fmtDateTime(o.date)}</td>
-    <td class="amount">${fmtEUR(o.amount)}</td>
-    <td><span class="status-chip ${cls}"><span class="dot"></span>${label}</span></td>
-    ${state.customFields.map(f => { const v = f.source !== 'manual' ? o.custom[f.key] : o.custom[f.id]; return `<td>${v ? escapeHTML(v) : '<span style="color:var(--ink-faint)">—</span>'}</td>`; }).join('')}
+    <td data-label="Canal"><span class="chan-dot"><span class="sw" style="background:${channelColor(o.channelType)}"></span>${connectorLabel(o.channelType)}</span></td>
+    <td data-label="Cliente">${escapeHTML(o.customer)}</td>
+    <td data-label="Pays" style="white-space:nowrap"><span>${o.country ? `${flagEmoji(o.country)} <span style="color:var(--ink-faint);font-size:12px" title="${escapeHTML(countryName(o.country))}">${escapeHTML(o.country.toUpperCase())}</span>` : '<span style="color:var(--ink-faint)" title="Pays non transmis par le site">—</span>'}</span></td>
+    <td data-label="Produit">${product ? escapeHTML(product.name) : '<span style="color:var(--ink-faint)">—</span>'}</td>
+    <td data-label="Date" style="white-space:nowrap">${String(o.date).length <= 10 ? fmtDate(o.date) : fmtDateTime(o.date)}</td>
+    <td class="amount" data-label="Montant">${fmtEUR(o.amount)}</td>
+    <td data-label="Statut"><span class="status-chip ${cls}"><span class="dot"></span>${label}</span></td>
+    ${state.customFields.map(f => { const v = f.source !== 'manual' ? o.custom[f.key] : o.custom[f.id]; return `<td data-label="${escapeHTML(f.label)}">${v ? escapeHTML(v) : '<span style="color:var(--ink-faint)">—</span>'}</td>`; }).join('')}
     <td></td>
   </tr>`;
 }
@@ -2550,12 +2550,12 @@ function pageSAV() {
   const renderTicket = t => `
     <tr data-action="openTicketDetail" data-id="${t.id}" class="row-click">
       <td>#${state.orders.find(o => o.id === t.orderId)?.orderNumber ?? t.orderNumber}</td>
-      <td><span class="chan-dot"><span class="sw" style="background:${channelColor(t.channelType)}"></span>${connectorLabel(t.channelType)}</span></td>
-      <td>${escapeHTML(t.product)}</td>
-      <td>${escapeHTML(t.reason)}</td>
-      <td>${fmtDate(t.date)}</td>
-      <td><span class="status-chip ${t.status === 'ouvert' ? 'warning' : 'good'}"><span class="dot"></span>${t.status === 'ouvert' ? 'Ouvert' : 'Résolu'}</span></td>
-      ${state.savFields.map(f => `<td>${t.custom[f.id] ? escapeHTML(t.custom[f.id]) : '<span style="color:var(--ink-faint)">—</span>'}</td>`).join('')}
+      <td data-label="Canal"><span class="chan-dot"><span class="sw" style="background:${channelColor(t.channelType)}"></span>${connectorLabel(t.channelType)}</span></td>
+      <td data-label="Produit">${escapeHTML(t.product)}</td>
+      <td data-label="Motif">${escapeHTML(t.reason)}</td>
+      <td data-label="Date">${fmtDate(t.date)}</td>
+      <td data-label="Statut"><span class="status-chip ${t.status === 'ouvert' ? 'warning' : 'good'}"><span class="dot"></span>${t.status === 'ouvert' ? 'Ouvert' : 'Résolu'}</span></td>
+      ${state.savFields.map(f => `<td data-label="${escapeHTML(f.label)}">${t.custom[f.id] ? escapeHTML(t.custom[f.id]) : '<span style="color:var(--ink-faint)">—</span>'}</td>`).join('')}
       <td><button class="btn sm" data-action="toggleTicket" data-id="${t.id}">${t.status === 'ouvert' ? 'Marquer résolu' : 'Rouvrir'}</button></td>
     </tr>`;
   return `
@@ -2566,11 +2566,11 @@ function pageSAV() {
     <div class="card">
       <h2>À traiter</h2>
       <div class="card-sub">Retours et réclamations en attente</div>
-      ${open.length ? `<div class="table-scroll"><table class="data"><thead>${savTableHead()}</thead><tbody>${open.map(renderTicket).join('')}</tbody></table></div>` : `<div class="empty">Aucun ticket ouvert — tout est traité.</div>`}
+      ${open.length ? `<div class="table-scroll"><table class="data table-cards"><thead>${savTableHead()}</thead><tbody>${open.map(renderTicket).join('')}</tbody></table></div>` : `<div class="empty">Aucun ticket ouvert — tout est traité.</div>`}
     </div>
     ${resolved.length ? `<div class="card" style="margin-top:14px;">
       <h2>Résolus récemment</h2>
-      <div class="table-scroll"><table class="data"><thead>${savTableHead()}</thead><tbody>${resolved.map(renderTicket).join('')}</tbody></table></div>
+      <div class="table-scroll"><table class="data table-cards"><thead>${savTableHead()}</thead><tbody>${resolved.map(renderTicket).join('')}</tbody></table></div>
     </div>` : ''}
   `;
 }
@@ -2763,15 +2763,15 @@ function pageComptabilite() {
         <div><h2>Charges</h2><div class="card-sub">Tout votre historique — abonnements, pub, emballages, livraison…</div></div>
         <button class="btn" data-action="openAddExpense">+ Ajouter une charge</button>
       </div>
-      ${allExpenses.length ? `<div class="table-scroll"><table class="data">
+      ${allExpenses.length ? `<div class="table-scroll"><table class="data table-cards">
         <thead><tr><th>Charge</th><th>Date${allExpenses.some(e => e.recurrence !== 'none') ? ' de première échéance' : ''}</th><th style="text-align:right">Montant</th><th></th></tr></thead>
         <tbody>
           ${allExpenses.map(e => `
             <tr>
               <td>${escapeHTML(e.label)}${e.recurrence && e.recurrence !== 'none' ? `<span class="suggest-chip" style="cursor:default; margin-top:0; margin-left:8px;" title="Charge récurrente">↻ ${RECURRENCE_LABELS[e.recurrence]}</span>` : ''}</td>
-              <td>${fmtDate(e.date)}</td>
-              <td class="amount">${fmtEUR(e.amount)}</td>
-              <td><span class="field-remove" data-action="removeExpense" data-id="${e.id}" title="${e.recurrence && e.recurrence !== 'none' ? 'Supprimer cette charge récurrente (toutes les échéances)' : 'Supprimer cette charge'}">×</span></td>
+              <td data-label="Date">${fmtDate(e.date)}</td>
+              <td class="amount" data-label="Montant">${fmtEUR(e.amount)}</td>
+              <td data-label="Supprimer"><span class="field-remove" data-action="removeExpense" data-id="${e.id}" title="${e.recurrence && e.recurrence !== 'none' ? 'Supprimer cette charge récurrente (toutes les échéances)' : 'Supprimer cette charge'}">×</span></td>
             </tr>`).join('')}
         </tbody>
       </table></div>

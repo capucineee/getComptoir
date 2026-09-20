@@ -459,3 +459,9 @@ table.data tbody tr.row-incomplete:hover { filter: brightness(0.97); }
   table.data.table-cards td[data-label="Fournisseur"] .stock-input { width: 100%; max-width: 60%; }
   .topbar-actions .btn { padding: 7px 10px; font-size: 12.5px; }
 }
+@media (max-width: 760px) {
+  table.data.table-cards td:empty { display: none; }
+  table.data.table-cards td[data-label=""]::before { display: none; }
+  table.data.table-cards td[data-label=""] { justify-content: flex-end; }
+  table.data.table-cards tr.row-click { cursor: pointer; }
+}
