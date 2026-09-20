@@ -2295,16 +2295,16 @@ function pageStock() {
       </div>
     </div>
     <div class="card">
-      <table class="data">
+      <table class="data table-cards">
         <thead><tr><th>Produit</th><th>Canaux</th><th>Seuil</th><th>Stock</th><th>Statut</th></tr></thead>
         <tbody>
           ${state.products.map(p => `
             <tr>
               <td>${escapeHTML(p.name)}</td>
-              <td>${p.channels.length ? p.channels.map(connectorLabel).join(' + ') : '<span style="color:var(--ink-faint)">—</span>'}</td>
-              <td class="amount">${p.threshold}</td>
-              <td class="amount"><input class="stock-input" type="number" min="0" value="${p.stock}" data-stock-id="${p.id}"></td>
-              <td><span class="status-chip ${alertLevel(p)}"><span class="dot"></span>${alertLevel(p) === 'good' ? 'OK' : alertLevel(p) === 'warning' ? 'Vigilance' : 'Critique'}</span></td>
+              <td data-label="Canaux">${p.channels.length ? p.channels.map(connectorLabel).join(' + ') : '<span style="color:var(--ink-faint)">—</span>'}</td>
+              <td class="amount" data-label="Seuil d'alerte">${p.threshold}</td>
+              <td class="amount" data-label="Stock"><input class="stock-input" type="number" min="0" value="${p.stock}" data-stock-id="${p.id}"></td>
+              <td data-label="Statut"><span class="status-chip ${alertLevel(p)}"><span class="dot"></span>${alertLevel(p) === 'good' ? 'OK' : alertLevel(p) === 'warning' ? 'Vigilance' : 'Critique'}</span></td>
             </tr>`).join('')}
         </tbody>
       </table>
@@ -2388,7 +2388,7 @@ function pageCatalogue() {
     ${catalogFilterIncomplete ? `<div class="callout" style="margin-bottom:14px;">Affichage filtré : ${fmtNum(incomplete.length)} produit${incomplete.length !== 1 ? 's' : ''} sans prix d'achat ou sans fournisseur. <span class="copy" data-action="clearCatalogFilter">Voir tout le catalogue</span></div>` : ''}
     ${orphanOrders.length ? `<div class="callout" style="margin-bottom:14px;">${fmtNum(orphanOrders.length)} commande${orphanOrders.length !== 1 ? 's' : ''} sans produit rattaché — envoyée${orphanOrders.length !== 1 ? 's' : ''} avant la mise à jour du connecteur. Redemandez à votre développeur de les renvoyer (même <code>externalId</code>) : elles se rattacheront automatiquement au produit dès qu'il enverra le nom du produit avec.</div>` : ''}
     <div class="card">
-      ${shown.length ? `<div class="table-scroll"><table class="data">
+      ${shown.length ? `<div class="table-scroll"><table class="data table-cards">
         <thead><tr>
           <th>Produit</th><th>Fournisseur</th><th>Prix d'achat (HT)</th><th>Prix de revente (HT)</th><th>Marge</th><th>Vendu</th><th>CA généré</th>
           ${state.catalogFields.map(f => `<th>${escapeHTML(f.label)}<span class="field-remove" data-action="removeCatalogField" data-id="${f.id}" title="Retirer cette colonne">×</span></th>`).join('')}
@@ -2407,16 +2407,16 @@ function pageCatalogue() {
             return `
             <tr class="${missingCostPrice ? 'row-incomplete' : ''}">
               <td>${escapeHTML(p.name)}</td>
-              <td><input class="stock-input" type="text" value="${escapeHTML(p.supplier || '')}" data-supplier-id="${p.id}" placeholder="—"></td>
-              <td class="amount"><input class="stock-input" type="number" min="0" step="0.01" value="${p.costPrice ?? 0}" data-cost-id="${p.id}"></td>
-              <td class="amount">
+              <td data-label="Fournisseur"><input class="stock-input" type="text" value="${escapeHTML(p.supplier || '')}" data-supplier-id="${p.id}" placeholder="—"></td>
+              <td class="amount" data-label="Prix d'achat (HT)"><input class="stock-input" type="number" min="0" step="0.01" value="${p.costPrice ?? 0}" data-cost-id="${p.id}"></td>
+              <td class="amount" data-label="Prix de revente (HT)">
                 <input class="stock-input" type="number" min="0" step="0.01" value="${p.salePrice ?? ''}" data-sale-price-id="${p.id}" placeholder="—">
                 ${p.salePrice == null && stats.lastSaleHT != null ? `<div class="suggest-chip" data-action="useSuggestedSalePrice" data-id="${p.id}" data-price="${stats.lastSaleHT}" title="Dernière vente réelle : ${fmtEUR(stats.lastSaleTTC)} TTC">Sugg. ${fmtEUR(stats.lastSaleHT)}</div>` : ''}
               </td>
-              <td class="amount">${hasMargin ? `${fmtEUR(margin)}<span style="color:var(--ink-faint); font-size:11.5px;"> (${marginPct.toFixed(0)}%)</span>` : '<span style="color:var(--ink-faint)">—</span>'}</td>
-              <td class="amount">${fmtNum(stats.count)}${stats.returns ? `<span style="color:var(--critical); font-size:11.5px;"> (${stats.returns} retour${stats.returns !== 1 ? 's' : ''})</span>` : ''}</td>
-              <td class="amount">${fmtEUR(stats.revenue)}</td>
-              ${state.catalogFields.map(f => `<td><input class="stock-input" type="text" value="${escapeHTML(p.custom[f.id] || '')}" data-catalog-custom-id="${p.id}" data-field-id="${f.id}"></td>`).join('')}
+              <td class="amount" data-label="Marge"><span>${hasMargin ? `${fmtEUR(margin)}<span style="color:var(--ink-faint); font-size:11.5px;"> (${marginPct.toFixed(0)}%)</span>` : '<span style="color:var(--ink-faint)">—</span>'}</span></td>
+              <td class="amount" data-label="Vendu"><span>${fmtNum(stats.count)}${stats.returns ? `<span style="color:var(--critical); font-size:11.5px;"> (${stats.returns} retour${stats.returns !== 1 ? 's' : ''})</span>` : ''}</span></td>
+              <td class="amount" data-label="CA généré">${fmtEUR(stats.revenue)}</td>
+              ${state.catalogFields.map(f => `<td data-label="${escapeHTML(f.label)}"><input class="stock-input" type="text" value="${escapeHTML(p.custom[f.id] || '')}" data-catalog-custom-id="${p.id}" data-field-id="${f.id}"></td>`).join('')}
             </tr>`;
           }).join('')}
         </tbody>

@@ -432,7 +432,7 @@ table.data tbody tr.row-incomplete:hover { filter: brightness(0.97); }
   nav.primary a { white-space: nowrap; flex: none; padding: 7px 11px; }
   main { padding: 16px 14px 48px; max-width: 100%; min-width: 0; }
   .topbar { margin-bottom: 16px; gap: 12px; }
-  table.data { display: block; overflow-x: auto; white-space: nowrap; }
+  table.data:not(.table-cards) { display: block; overflow-x: auto; white-space: nowrap; }
   .filters input[type="text"] { min-width: 0; flex: 1 1 100%; }
   .filters .count { margin-left: 0; }
   .kpi-face { padding: 12px 12px; }
@@ -440,4 +440,22 @@ table.data tbody tr.row-incomplete:hover { filter: brightness(0.97); }
   .modal-overlay { padding: 10px; }
   .modal { padding: 18px; }
   .chart-wrap svg { height: 180px; }
+}
+
+/* Phones: product tables (Stock, Catalogue) turn each row into a labelled card instead of a
+   sideways-scrolling table. */
+@media (max-width: 760px) {
+  .card { padding: 14px; }
+  table.data.table-cards { display: block; }
+  .table-cards thead { display: none; }
+  .table-cards tbody { display: flex; flex-direction: column; gap: 10px; }
+  .table-cards tr { display: flex; flex-direction: column; gap: 9px; padding: 12px 14px; border: 1px solid var(--rule-soft); border-radius: 10px; background: var(--surface-sunken); }
+  .table-cards tr.row-incomplete { border-color: var(--warning); }
+  table.data.table-cards td { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 6px 12px; padding: 0; border: none; text-align: right; }
+  table.data.table-cards td::before { content: attr(data-label); color: var(--ink-faint); font: 400 12px var(--font); text-align: left; flex: none; }
+  table.data.table-cards td:first-child { justify-content: flex-start; font-size: 15px; font-weight: 650; text-align: left; }
+  table.datatable.data.table-cards td:first-child::before { display: none; }
+  .table-cards .stock-input { width: 120px; max-width: 55%; text-align: right; }
+  table.data.table-cards td[data-label="Fournisseur"] .stock-input { width: 100%; max-width: 60%; }
+  .topbar-actions .btn { padding: 7px 10px; font-size: 12.5px; }
 }
