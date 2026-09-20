@@ -2216,7 +2216,7 @@ function shipCard(o, stage) {
   const product = state.products.find(p => p.id === o.productId);
   const age = ageDays(o);
   const late = age >= 2;
-  return `<div class="ship-card ${stage === 'bloquee' ? 'blocked' : ''}">
+  return `<div class="ship-card ${stage === 'bloquee' ? 'blocked' : ''}" draggable="true" data-order-id="${o.id}" title="Glissez la carte vers une autre colonne">
     <div class="ship-top"><b>${orderDisplayRef(o)}</b><span class="chan-dot"><span class="sw" style="background:${channelColor(o.channelType)}"></span>${connectorLabel(o.channelType)}</span></div>
     <div class="ship-main">${flagHTML(o)}${escapeHTML(o.customer)}</div>
     <div class="ship-sub">${product ? `${escapeHTML(product.name)} × ${fmtNum(o.quantity || 1)}` : 'Produit non lié'} · ${fmtEUR(o.amount)}</div>
@@ -2231,7 +2231,8 @@ function shipCard(o, stage) {
   </div>`;
 }
 function pageExpeditions() {
-  const pending = state.orders.filter(o => o.status === 'preparation').sort((a, b) => new Date(a.date) - new Date(b.date));
+  const sortDir = state.shipSort === 'desc' ? 'desc' : 'asc';
+  const pending = state.orders.filter(o => o.status === 'preparation').sort((a, b) => sortDir === 'asc' ? new Date(a.date) - new Date(b.date) : new Date(b.date) - new Date(a.date));
   const cols = {
     a_preparer: pending.filter(o => fulfillmentOf(o) === 'a_preparer'),
     prete: pending.filter(o => fulfillmentOf(o) === 'prete'),
@@ -2241,7 +2242,7 @@ function pageExpeditions() {
   const newToday = pending.filter(o => new Date(o.date).toDateString() === today).length;
   const lateCount = pending.filter(o => ageDays(o) >= 2).length;
   const col = (key, title, sub, cls) => `
-    <div class="ship-col">
+    <div class="ship-col" data-stage="${key}">
       <div class="ship-col-head"><h2>${title}</h2><span class="status-chip ${cls}"><span class="dot"></span>${fmtNum(cols[key].length)}</span></div>
       <div class="card-sub">${sub}</div>
       ${cols[key].length ? cols[key].map(o => shipCard(o, key)).join('') : `<div class="empty">${key === 'a_preparer' ? 'Rien à préparer.' : key === 'prete' ? 'Aucune commande prête.' : 'Aucune commande bloquée.'}</div>`}
@@ -2249,15 +2250,26 @@ function pageExpeditions() {
   return `
     <div class="topbar">
       <div><h1>Expéditions du jour</h1><div class="sub">${fmtNum(pending.length)} commande${pending.length !== 1 ? 's' : ''} en cours · ${fmtNum(newToday)} reçue${newToday !== 1 ? 's' : ''} aujourd'hui${lateCount ? ` · <span style="color:var(--critical)">${fmtNum(lateCount)} en retard (2 j et +)</span>` : ''}</div></div>
-      <div class="topbar-actions">${themeToggleHTML()}</div>
+      <div class="topbar-actions">
+        <div class="range" title="Ordre des cartes dans chaque colonne">
+          <button data-action="setShipSort" data-sort="asc" class="${sortDir === 'asc' ? 'active' : ''}">Plus anciennes d'abord</button>
+          <button data-action="setShipSort" data-sort="desc" class="${sortDir === 'desc' ? 'active' : ''}">Plus récentes d'abord</button>
+        </div>
+        ${themeToggleHTML()}
+      </div>
     </div>
-    <div class="callout" style="margin-bottom:16px;">Le classement est propre à Comptoir : il ne change rien sur votre plateforme. Une commande quitte cette page dès qu'elle est livrée ou retournée (automatiquement pour Shopify et WooCommerce, ou via « Marquer expédiée » pour un site personnalisé).</div>
+    <div class="callout" style="margin-bottom:16px;">Glissez une carte d'une colonne à l'autre pour la déplacer (déposée dans « Bloquées », on vous demande la raison). Sur téléphone, utilisez les boutons de la carte. Le classement est propre à Comptoir : il ne change rien sur votre plateforme. Une commande quitte cette page dès qu'elle est livrée ou retournée (automatiquement pour Shopify et WooCommerce, ou via « Marquer expédiée » pour un site personnalisé).</div>
     <div class="ship-board">
-      ${col('a_preparer', 'À préparer', 'Les plus anciennes en premier', 'warning')}
+      ${col('a_preparer', 'À préparer', sortDir === 'asc' ? 'Les plus anciennes en premier' : 'Les plus récentes en premier', 'warning')}
       ${col('prete', 'Prêtes', 'Emballées, en attente du transporteur', 'good')}
       ${col('bloquee', 'Bloquées', 'À débloquer avant expédition', 'critical')}
     </div>
   `;
+}
+function moveToStage(o, stage) {
+  o.fulfillment = stage;
+  delete o.blockReason; delete o.blockNote; delete o.blockedAt;
+  o.updatedAt = new Date().toISOString();
 }
 function openBlockModal(orderId) {
   const o = state.orders.find(x => x.id === orderId);
@@ -3287,8 +3299,8 @@ document.addEventListener('click', e => {
     if (!o) return;
     if (action === 'shipBlockOpen') return openBlockModal(o.id);
     const now = new Date().toISOString();
-    if (action === 'shipReady') { o.fulfillment = 'prete'; delete o.blockReason; delete o.blockNote; delete o.blockedAt; toast(`Commande ${orderDisplayRef(o)} prête.`); }
-    if (action === 'shipReset') { o.fulfillment = 'a_preparer'; delete o.blockReason; delete o.blockNote; delete o.blockedAt; toast(`Commande ${orderDisplayRef(o)} remise à préparer.`); }
+    if (action === 'shipReady') { moveToStage(o, 'prete'); toast(`Commande ${orderDisplayRef(o)} prête.`); }
+    if (action === 'shipReset') { moveToStage(o, 'a_preparer'); toast(`Commande ${orderDisplayRef(o)} remise à préparer.`); }
     if (action === 'shipBlockSubmit') {
       const wasBlocked = o.fulfillment === 'bloquee';
       o.fulfillment = 'bloquee';
@@ -3303,6 +3315,7 @@ document.addEventListener('click', e => {
     persist(); render();
     return;
   }
+  if (action === 'setShipSort') { setState({ shipSort: el.dataset.sort === 'desc' ? 'desc' : 'asc' }); return; }
   if (action === 'openTracking') return openTrackingModal(el.dataset.id);
   if (action === 'flipKpi') {
     const key = el.dataset.kpi;
@@ -3782,6 +3795,45 @@ document.addEventListener('click', e => {
     persist(); closeModal(); render(); toast(`Champ « ${f?.label ?? ''} » retiré.`);
     return;
   }
+});
+
+// Expéditions board: drag a card into another column. Dropping on "Bloquées" asks for the
+// reason first (a block without one is useless later), so that move goes through the modal.
+let draggedShipId = null;
+document.addEventListener('dragstart', e => {
+  const card = e.target.closest && e.target.closest('.ship-card');
+  if (!card) return;
+  draggedShipId = card.dataset.orderId;
+  e.dataTransfer.effectAllowed = 'move';
+  try { e.dataTransfer.setData('text/plain', draggedShipId); } catch (err) {}
+  requestAnimationFrame(() => card.classList.add('dragging'));
+});
+document.addEventListener('dragend', () => {
+  draggedShipId = null;
+  document.querySelectorAll('.ship-card.dragging').forEach(c => c.classList.remove('dragging'));
+  document.querySelectorAll('.ship-col.drag-over').forEach(c => c.classList.remove('drag-over'));
+});
+document.addEventListener('dragover', e => {
+  const col = e.target.closest && e.target.closest('.ship-col');
+  if (!col || !draggedShipId) return;
+  e.preventDefault();
+  e.dataTransfer.dropEffect = 'move';
+  document.querySelectorAll('.ship-col.drag-over').forEach(c => { if (c !== col) c.classList.remove('drag-over'); });
+  col.classList.add('drag-over');
+});
+document.addEventListener('drop', e => {
+  const col = e.target.closest && e.target.closest('.ship-col');
+  if (!col || !draggedShipId) return;
+  e.preventDefault();
+  col.classList.remove('drag-over');
+  const o = state.orders.find(x => x.id === draggedShipId);
+  const stage = col.dataset.stage;
+  draggedShipId = null;
+  if (!o || o.status !== 'preparation' || fulfillmentOf(o) === stage) return;
+  if (stage === 'bloquee') return openBlockModal(o.id);
+  moveToStage(o, stage);
+  persist(); render();
+  toast(`Commande ${orderDisplayRef(o)} ${stage === 'prete' ? 'prête' : 'remise à préparer'}.`);
 });
 
 document.addEventListener('keydown', e => {

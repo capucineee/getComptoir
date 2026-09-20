@@ -388,3 +388,7 @@ table.data tbody tr.row-incomplete:hover { filter: brightness(0.97); }
 .ship-reason span { font-size: 11px; opacity: .8; }
 .ship-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
 .nav-badge { margin-left: auto; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: var(--critical); color: #fff; font-size: 11px; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; }
+.ship-card[draggable="true"] { cursor: grab; }
+.ship-card.dragging { opacity: .4; }
+.ship-col { min-height: 140px; transition: background .12s, border-color .12s; }
+.ship-col.drag-over { background: var(--brand-soft); border-color: var(--brand); border-style: dashed; }
