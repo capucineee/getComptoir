@@ -1301,10 +1301,12 @@ def _ingest_order_core(conn, user_id: str, channel_type: str, connector_id: str,
         raise ApiError(400, "Le montant ne peut pas être négatif.")
 
     status_raw = _pick_field(body, FIELD_ALIASES["status"])
+    status_known = True
     if status_raw not in (None, ""):
         status, status_note = _normalize_status(status_raw)
     else:
         inferred = _infer_status_from_signals(body)
+        status_known = bool(inferred)
         status, status_note = (inferred, None) if inferred else ("preparation", None)
 
     external_id_raw = _pick_field(body, FIELD_ALIASES["externalId"])
@@ -1355,6 +1357,7 @@ def _ingest_order_core(conn, user_id: str, channel_type: str, connector_id: str,
         first_item = body["items"][0]
         if isinstance(first_item, dict):
             quantity_raw = _pick_field(first_item, FIELD_ALIASES["quantity"])
+    quantity_provided = quantity_raw is not None
     quantity = _parse_amount(quantity_raw)
     quantity = int(quantity) if quantity and quantity > 0 else 1
 
@@ -1401,6 +1404,14 @@ def _ingest_order_core(conn, user_id: str, channel_type: str, connector_id: str,
                 # reflected, not just a "duplicate, ignored" no-op. A merchant re-sending an
                 # order by hand to backfill a missing product link goes through the same path.
                 changed = False
+                # A partial update (say, just a new status) must not reset what it doesn't
+                # mention: no quantity sent keeps the order's quantity, no status information
+                # at all keeps its status — otherwise a delivered order would silently fall
+                # back to "en préparation" and its quantity to 1 on the next bare update.
+                if not quantity_provided:
+                    quantity = existing.get("quantity") or 1
+                if not status_known:
+                    status = existing.get("status") or status
 
                 def _adjust_stock(product_id_, qty, order_status, reverse=False):
                     if not product_id_:

@@ -417,3 +417,27 @@ table.data tbody tr.row-incomplete:hover { filter: brightness(0.97); }
 .status-chip.info { background: rgba(57,135,229,.14); color: var(--cat-shopify); }
 .tl-dot.info { background: var(--cat-shopify); }
 .wf-step.current.info .wf-dot, .wf-step.done.info .wf-dot { background: var(--cat-shopify); border-color: var(--cat-shopify); }
+
+/* Phones: the sidebar becomes a compact top bar with a horizontally scrollable menu, and
+   wide tables scroll inside themselves instead of stretching the whole page. */
+@media (max-width: 760px) {
+  .app { flex-direction: column; }
+  .sidebar { width: 100%; flex-direction: row; flex-wrap: wrap; align-items: center; padding: 10px 12px 6px; border-right: none; border-bottom: 1px solid var(--rule-soft); position: sticky; top: 0; z-index: 50; }
+  .brand { padding: 0 8px 0 0; }
+  .sidebar-foot { margin: 0 0 0 auto; padding: 0; border-top: none; }
+  .sidebar-foot .connector-status, .sidebar-foot .plan-chip, .account-email { display: none; }
+  .account-row { border-top: none; margin: 0; padding: 0; }
+  nav.primary { order: 3; flex: 1 1 100%; flex-direction: row; gap: 4px; overflow-x: auto; padding-bottom: 6px; scrollbar-width: none; }
+  nav.primary::-webkit-scrollbar { display: none; }
+  nav.primary a { white-space: nowrap; flex: none; padding: 7px 11px; }
+  main { padding: 16px 14px 48px; max-width: 100%; min-width: 0; }
+  .topbar { margin-bottom: 16px; gap: 12px; }
+  table.data { display: block; overflow-x: auto; white-space: nowrap; }
+  .filters input[type="text"] { min-width: 0; flex: 1 1 100%; }
+  .filters .count { margin-left: 0; }
+  .kpi-face { padding: 12px 12px; }
+  .kpi .value { font-size: 18px; }
+  .modal-overlay { padding: 10px; }
+  .modal { padding: 18px; }
+  .chart-wrap svg { height: 180px; }
+}
