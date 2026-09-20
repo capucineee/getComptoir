@@ -2081,7 +2081,7 @@ function deltaHTML(delta, isPoint) {
   return `<span class="delta ${pos ? 'pos' : 'neg'}">${txt}</span>`;
 }
 function statusMeta(status) {
-  const map = { livree: ['good', 'Livrée'], preparation: ['warning', 'En préparation'], retour: ['critical', 'Retour'] };
+  const map = { livree: ['good', 'Livrée'], en_route: ['info', 'En route'], preparation: ['warning', 'En préparation'], retour: ['critical', 'Retour'] };
   return map[status];
 }
 // A real connector's order carries its actual reference from the source (Shopify's order
@@ -2139,8 +2139,9 @@ function pageVentes() {
         </select>
         <select id="salesStatus">
           <option value="all" ${salesFilter.status === 'all' ? 'selected' : ''}>Tous les statuts</option>
-          <option value="livree" ${salesFilter.status === 'livree' ? 'selected' : ''}>Livrée</option>
           <option value="preparation" ${salesFilter.status === 'preparation' ? 'selected' : ''}>En préparation</option>
+          <option value="en_route" ${salesFilter.status === 'en_route' ? 'selected' : ''}>En route</option>
+          <option value="livree" ${salesFilter.status === 'livree' ? 'selected' : ''}>Livrée</option>
           <option value="retour" ${salesFilter.status === 'retour' ? 'selected' : ''}>Retour</option>
         </select>
         <span class="count">${fmtNum(matchCount)} résultat${matchCount > 1 ? 's' : ''}${truncated ? ' · 120 affichés' : ''}</span>
@@ -2176,7 +2177,7 @@ function escapeHTML(s) { return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp
 
 // Manual status change on a custom-site order (no webhook exists for it). Mirrors the
 // server's own reverse-old/apply-new stock logic (server.py's _adjust_stock): only 'retour'
-// releases stock back, so preparation <-> livree leaves stock alone, crossing to or from
+// releases stock back, so preparation / en route / livree leave stock alone, crossing to or from
 // retour does not. Also appends to the order's status history.
 function applyManualStatus(o, newStatus) {
   const product = state.products.find(p => p.id === o.productId);
@@ -3191,6 +3192,7 @@ function openOrderDetailModal(orderId) {
       <div class="item"><div class="k">Statut${o.channelType === 'custom' ? help("Un site personnalisé n'a pas de webhook de mise à jour automatique : modifiez le statut ici quand il change réellement sur votre site.") : ''}</div><div class="v">${o.channelType === 'custom' ? `
         <select id="orderStatusSelect" data-order-id="${o.id}">
           <option value="preparation" ${o.status === 'preparation' ? 'selected' : ''}>En préparation</option>
+          <option value="en_route" ${o.status === 'en_route' ? 'selected' : ''}>En route</option>
           <option value="livree" ${o.status === 'livree' ? 'selected' : ''}>Livrée</option>
           <option value="retour" ${o.status === 'retour' ? 'selected' : ''}>Retour</option>
         </select>
@@ -3216,13 +3218,15 @@ function openOrderDetailModal(orderId) {
           { key: 'recue', label: 'Reçue', at: events[0].at },
           { key: 'prep', label: 'En préparation', at: atOf(e => e.status === 'preparation') },
           { key: 'prete', label: 'Prête', at: atOf(e => e.stage === 'prete') },
+          { key: 'route', label: 'En route', at: atOf(e => e.status === 'en_route') },
           { key: 'final', label: finalLabel, at: isFinal && lastFinal ? lastFinal.at : null, cls: o.status === 'retour' ? 'critical' : 'good' }
         ];
-        let current = 'recue';
+        let current;
         if (isFinal) current = 'final';
+        else if (o.status === 'en_route') current = 'route';
         else if (fulfillmentOf(o) === 'prete') current = 'prete';
         else current = 'prep';
-        const order = ['recue', 'prep', 'prete', 'final'];
+        const order = ['recue', 'prep', 'prete', 'route', 'final'];
         const stepper = steps.map(st => {
           const idx = order.indexOf(st.key), cur = order.indexOf(current);
           const state = st.key === current ? 'current' : (st.at || idx < cur) ? (st.at ? 'done' : 'skipped') : 'todo';
@@ -3335,7 +3339,7 @@ document.addEventListener('click', e => {
       closeModal();
       toast(`Commande ${orderDisplayRef(o)} bloquée.`);
     }
-    if (action === 'shipDeliver') { if (o.channelType !== 'custom') return; applyManualStatus(o, 'livree'); toast(`Commande ${orderDisplayRef(o)} marquée expédiée.`); }
+    if (action === 'shipDeliver') { if (o.channelType !== 'custom') return; applyManualStatus(o, 'en_route'); toast(`Commande ${orderDisplayRef(o)} en route.`); }
     o.updatedAt = now;
     persist(); render();
     return;

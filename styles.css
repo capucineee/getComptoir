@@ -414,3 +414,6 @@ table.data tbody tr.row-incomplete:hover { filter: brightness(0.97); }
 .wf-step.todo .wf-label, .wf-step.skipped .wf-label { color: var(--ink-faint); font-weight: 500; }
 .wf-date { font-size: 11px; color: var(--ink-faint); font-family: var(--font-mono); }
 .wf-pill { margin-top: 4px; font-size: 11px; color: var(--critical); background: var(--critical-soft); padding: 2px 7px; border-radius: 10px; }
+.status-chip.info { background: rgba(57,135,229,.14); color: var(--cat-shopify); }
+.tl-dot.info { background: var(--cat-shopify); }
+.wf-step.current.info .wf-dot, .wf-step.done.info .wf-dot { background: var(--cat-shopify); border-color: var(--cat-shopify); }

@@ -904,7 +904,7 @@ def handle_put_state(token, body):
 # on app_state across both this path and PUT /api/state — simple and correct at this stage's
 # traffic; sharding per user is the natural upgrade once concurrent writers matter.
 STATE_LOCK = threading.Lock()
-ORDER_STATUSES = {"livree", "preparation", "retour"}
+ORDER_STATUSES = {"livree", "en_route", "preparation", "retour"}
 
 
 def require_active_plan(user):
@@ -1055,9 +1055,9 @@ FIELD_ALIASES = {
     "quantity": ["quantity", "qty", "quantite", "quantité", "nombre", "count", "units"],
 }
 STATUS_ALIASES = {
-    "livree": {"livree", "livre", "delivered", "shipped", "completed", "complete", "fulfilled", "paid", "payee", "done",
-               "expedie", "expediee", "envoye", "envoyee", "dispatched", "in_transit", "en_transit", "out_for_delivery",
-               "en_livraison", "en_cours_de_livraison", "en_cours_d_acheminement", "picked_up", "collected", "retire", "retiree"},
+    "livree": {"livree", "livre", "delivered", "completed", "complete", "paid", "payee", "done", "picked_up", "collected", "retire", "retiree", "remis", "remise"},
+    "en_route": {"en_route", "enroute", "expedie", "expediee", "envoye", "envoyee", "shipped", "fulfilled", "dispatched", "in_transit", "en_transit",
+                 "out_for_delivery", "en_livraison", "en_cours_de_livraison", "en_cours_d_acheminement", "in_delivery", "sent", "pris_en_charge"},
     "preparation": {"preparation", "pending", "processing", "en_attente", "created", "new", "confirmed", "awaiting", "open", "en_preparation"},
     "retour": {"retour", "refunded", "returned", "cancelled", "canceled", "annulee", "annule", "rembourse", "refund",
                "retourne", "retournee", "refuse", "refusee", "failed", "echec", "lost", "perdue"},
@@ -1141,14 +1141,28 @@ def _infer_status_from_signals(body):
     if financial_status and str(financial_status).strip().lower() in {"refunded", "partially_refunded", "voided"}:
         return "retour"
 
-    ship_keys = ["delivered", "is_delivered", "delivered_at", "deliveredAt", "shipped", "is_shipped",
-                 "shipped_at", "shippedAt", "fulfilled", "is_fulfilled", "fulfilled_at", "fulfilledAt"]
-    if any(_truthy(_pick_field(body, [k])) for k in ship_keys):
+    delivered_keys = ["delivered", "is_delivered", "delivered_at", "deliveredAt"]
+    if any(_truthy(_pick_field(body, [k])) for k in delivered_keys):
+        return "livree"
+    # Shopify reports the carrier's delivery on each fulfillment (shipment_status), which is
+    # the only place it distinguishes "shipped" from "delivered".
+    fulfillments = body.get("fulfillments")
+    if isinstance(fulfillments, list) and any(
+        isinstance(f, dict) and str(f.get("shipment_status", "")).strip().lower() == "delivered" for f in fulfillments
+    ):
         return "livree"
 
+    ship_keys = ["shipped", "is_shipped", "shipped_at", "shippedAt", "fulfilled", "is_fulfilled", "fulfilled_at", "fulfilledAt"]
+    if any(_truthy(_pick_field(body, [k])) for k in ship_keys):
+        return "en_route"
+
     fulfillment_status = _pick_field(body, ["fulfillment_status", "fulfillmentStatus"])
-    if fulfillment_status and str(fulfillment_status).strip().lower() in {"fulfilled", "shipped", "delivered"}:
-        return "livree"
+    if fulfillment_status:
+        fs = str(fulfillment_status).strip().lower()
+        if fs == "delivered":
+            return "livree"
+        if fs in {"fulfilled", "shipped", "partial"}:
+            return "en_route"
 
     return None
 
@@ -1405,6 +1419,10 @@ def _ingest_order_core(conn, user_id: str, channel_type: str, connector_id: str,
                     existing["productId"] = find_or_create_product(product_name)
                     changed = True
 
+                if existing.get("status") == "livree" and status == "en_route":
+                    # Delivered can't go back to "en route": platforms keep re-sending
+                    # "fulfilled" on every later update, which must not undo a delivery.
+                    status = "livree"
                 old_status = existing.get("status")
                 old_quantity = existing.get("quantity") or 1
                 if existing.get("productId"):
