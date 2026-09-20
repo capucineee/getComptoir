@@ -1055,9 +1055,12 @@ FIELD_ALIASES = {
     "quantity": ["quantity", "qty", "quantite", "quantité", "nombre", "count", "units"],
 }
 STATUS_ALIASES = {
-    "livree": {"livree", "delivered", "shipped", "completed", "complete", "fulfilled", "paid", "payee", "done"},
+    "livree": {"livree", "livre", "delivered", "shipped", "completed", "complete", "fulfilled", "paid", "payee", "done",
+               "expedie", "expediee", "envoye", "envoyee", "dispatched", "in_transit", "en_transit", "out_for_delivery",
+               "en_livraison", "en_cours_de_livraison", "en_cours_d_acheminement", "picked_up", "collected", "retire", "retiree"},
     "preparation": {"preparation", "pending", "processing", "en_attente", "created", "new", "confirmed", "awaiting", "open", "en_preparation"},
-    "retour": {"retour", "refunded", "returned", "cancelled", "canceled", "annulee", "rembourse", "refund"},
+    "retour": {"retour", "refunded", "returned", "cancelled", "canceled", "annulee", "annule", "rembourse", "refund",
+               "retourne", "retournee", "refuse", "refusee", "failed", "echec", "lost", "perdue"},
 }
 # Every alias name across every recognized field, lowercased — never re-offer one of these
 # as a "discovered" extra field, it's already surfaced as amount/status/customer/etc.

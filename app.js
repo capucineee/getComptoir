@@ -1630,7 +1630,6 @@ function habitsInsightText(h) {
 // (with the real figures behind it), and the list cards get an (i) toggle. Which ones are
 // open lives at module level because the whole page is re-rendered on every sync.
 const flippedKpis = new Set();
-const openHows = new Set();
 function kpiCard(key, label, target, format, valueText, deltaHtml, sparkHtml, explain) {
   return `<div class="kpi ${flippedKpis.has(key) ? 'flipped' : ''}" data-kpi="${key}" data-action="flipKpi" role="button" tabindex="0" aria-label="${escapeHTML(label)} — cliquer pour voir le calcul">
     <div class="kpi-inner">
@@ -1639,8 +1638,11 @@ function kpiCard(key, label, target, format, valueText, deltaHtml, sparkHtml, ex
     </div>
   </div>`;
 }
-function howBtn(id) { return `<button type="button" class="how-btn ${openHows.has(id) ? 'on' : ''}" data-action="toggleHow" data-how="${id}" aria-label="Comment c'est calculé ?" title="Comment c'est calculé ?">i</button>`; }
-function howBox(id, html) { return `<div class="how-box" data-how-box="${id}" ${openHows.has(id) ? '' : 'hidden'}>${html}</div>`; }
+// Discreet contextual help: a small "?" that reveals its text on hover, focus or tap, so
+// explanations never take up room on the page.
+function help(html) {
+  return `<span class="help"><button type="button" class="help-btn" data-action="toggleHelp" aria-label="Aide">?</button><span class="help-pop" role="tooltip">${html}</span></span>`;
+}
 /* ---------- visitor tracking (cookieless script on the merchant's own site) ---------- */
 const TRACKABLE = ['custom', 'woocommerce', 'shopify'];
 const NO_TRACK_REASON = {
@@ -1775,12 +1777,10 @@ function pageTrafic() {
     </div>
 
     <div class="grid">
-      <div class="card"><h2>D'où viennent-ils ? ${howBtn('sources')}</h2>
-        ${howBox('sources', "Source = site d'où arrive le visiteur (Google, Instagram…), ou le paramètre utm_source d'un lien de campagne (newsletter…). « Direct » = adresse tapée, favori, ou origine inconnue. Un visiteur est classé selon sa première visite du jour.")}
+      <div class="card"><h2>D'où viennent-ils ? ${help("Source = site d'où arrive le visiteur (Google, Instagram…), ou le paramètre utm_source d'un lien de campagne (newsletter…). « Direct » = adresse tapée, favori, ou origine inconnue. Un visiteur est classé selon sa première visite du jour.")}</h2>
         <div class="card-sub">Part des visiteurs par source</div>
         ${st && st.sources.length ? bars(st.sources, total, r => escapeHTML(r.source)) : '<div class="empty">Pas encore de données.</div>'}</div>
-      <div class="card"><h2>Pays des visiteurs ${howBtn('paysvis')}</h2>
-        ${howBox('paysvis', "Le pays est déduit du réseau du visiteur lorsque l'hébergeur le fournit, sinon de son fuseau horaire : c'est approximatif (un VPN ou un voyage peut fausser).")}
+      <div class="card"><h2>Pays des visiteurs ${help("Le pays est déduit du réseau du visiteur lorsque l'hébergeur le fournit, sinon de son fuseau horaire : c'est approximatif (un VPN ou un voyage peut fausser).")}</h2>
         <div class="card-sub">Part des visiteurs (approximatif)</div>
         ${st && st.countries.length ? bars(st.countries, totalC, r => r.country ? `${flagEmoji(r.country)} ${escapeHTML(countryName(r.country))}` : '<span style="color:var(--ink-faint)">Pays inconnu</span>') : '<div class="empty">Pas encore de données.</div>'}</div>
     </div>
@@ -1788,13 +1788,11 @@ function pageTrafic() {
     <div class="section-head"><h2>Par site</h2><span>Visiteurs, ventes et conversion de chaque connecteur</span></div>
     <div class="grid">
       <div class="card">
-        <h2>Sites suivis ${howBtn('parsite')}</h2>
-        ${howBox('parsite', "Conversion d'un site = ses ventes (retours exclus) ÷ ses visiteurs. Elle n'est affichée que si ce type de plateforme n'est connecté qu'une seule fois, sinon les ventes ne peuvent pas être attribuées avec certitude à un site précis.")}
+        <h2>Sites suivis ${help("Conversion d'un site = ses ventes (retours exclus) ÷ ses visiteurs. Elle n'est affichée que si ce type de plateforme n'est connecté qu'une seule fois, sinon les ventes ne peuvent pas être attribuées avec certitude à un site précis.")}</h2>
         ${perSite ? `<div class="table-scroll"><table class="data"><thead><tr><th>Site</th><th>Statut</th><th style="text-align:right">Visiteurs</th><th style="text-align:right">Pages vues</th><th style="text-align:right">Ventes</th><th style="text-align:right">Conversion</th><th></th></tr></thead><tbody>${perSite}</tbody></table></div>` : `<div class="empty">Aucun site suivi possible : connectez Shopify, WooCommerce ou un site personnalisé.</div>`}
       </div>
       <div class="card">
-        <h2>Couverture du suivi ${howBtn('couverture')}</h2>
-        ${howBox('couverture', "Le suivi ne peut exister que là où vous contrôlez le site et pouvez y ajouter un script. Etsy, Instagram Shop et TikTok Shop l'interdisent : Comptoir n'y voit que les ventes.")}
+        <h2>Couverture du suivi ${help("Le suivi ne peut exister que là où vous contrôlez le site et pouvez y ajouter un script. Etsy, Instagram Shop et TikTok Shop l'interdisent : Comptoir n'y voit que les ventes.")}</h2>
         <div class="card-sub">Ce qui est suivi, et pourquoi</div>
         ${coverage}
       </div>
@@ -1881,8 +1879,7 @@ function pageOverview() {
 
     <div class="section-head"><h2>Ce que vous gagnez</h2><span>Du chiffre d'affaires au bénéfice</span></div>
     <div class="card" style="margin-bottom:14px;">
-      <h2>Ce qu'il vous reste ${howBtn('gain')}</h2>
-      ${howBox('gain', "Le chiffre d'affaires n'est pas votre gain : c'est ce que les clients ont payé (TTC). Il faut en retirer la TVA (estimée à 20 %), le coût d'achat des produits vendus (quantité comprise) et vos charges (abonnements, publicité, emballages…). Les commandes en retour sont exclues. Les frais de plateforme, de paiement et de port ne sont pas encore pris en compte.")}
+      <h2>Ce qu'il vous reste ${help("Le chiffre d'affaires n'est pas votre gain : c'est ce que les clients ont payé (TTC). Il faut en retirer la TVA (estimée à 20 %), le coût d'achat des produits vendus (quantité comprise) et vos charges (abonnements, publicité, emballages…). Les commandes en retour sont exclues. Les frais de plateforme, de paiement et de port ne sont pas encore pris en compte.")}</h2>
       <div class="card-sub">${rangeLabel(bounds)} · estimation simplifiée, ne remplace pas votre comptable</div>
       ${(() => {
         const base = acc.ttc || 1;
@@ -1931,8 +1928,7 @@ function pageOverview() {
     <div class="section-head"><h2>Vos ventes en détail</h2><span>Quoi, où et par quel canal</span></div>
     <div class="grid">
       <div class="card">
-        <h2>Produits les plus vendus ${howBtn('produits')}</h2>
-        ${howBox('produits', "Produits classés par quantité vendue sur la période. Les retours sont exclus, et seules les commandes rattachées à un produit sont comptées.")}
+        <h2>Produits les plus vendus ${help("Produits classés par quantité vendue sur la période. Les retours sont exclus, et seules les commandes rattachées à un produit sont comptées.")}</h2>
         <div class="card-sub">${rangeLabel(bounds)} · classé par quantité vendue</div>
         ${bestSellers.length ? bestSellers.map(r => `
           <div class="alert-row">
@@ -1941,8 +1937,7 @@ function pageOverview() {
           </div>`).join('') : `<div class="empty">Aucune vente liée à un produit sur cette période.</div>`}
       </div>
       <div class="card">
-        <h2>Répartition par canal ${howBtn('canal')}</h2>
-        ${howBox('canal', "Chaque canal = somme des montants de ses commandes ÷ chiffre d'affaires total de la période (retours exclus).")}
+        <h2>Répartition par canal ${help("Chaque canal = somme des montants de ses commandes ÷ chiffre d'affaires total de la période (retours exclus).")}</h2>
         <div class="card-sub">Part du chiffre d'affaires</div>
         ${breakdown.length ? breakdown.map(b => `
           <div class="chan-row">
@@ -1953,8 +1948,7 @@ function pageOverview() {
     </div>
 
     <div class="card" style="margin-bottom:14px;">
-      <h2>Ventes par pays ${howBtn('pays')}</h2>
-      ${howBox('pays', "Chaque pays = nombre de ventes de ce pays ÷ nombre total de ventes de la période. Les commandes « Retour » sont exclues. Une commande sans pays est comptée dans « Pays non renseigné ».")}
+      <h2>Ventes par pays ${help((countries.length && countries.every(c => c.code === null) ? "Aucun pays reçu pour l'instant : le site doit envoyer un champ <code>country</code> avec ses commandes. " : '') + "Chaque pays = nombre de ventes de ce pays ÷ nombre total de ventes de la période. Les commandes « Retour » sont exclues. Une commande sans pays est comptée dans « Pays non renseigné ».")}</h2>
       <div class="card-sub">${rangeLabel(bounds)} · part du nombre de ventes (retours exclus)</div>
       ${countries.length ? countries.map(c => {
         const pctTxt = c.pct > 0 && c.pct < 1 ? '<1%' : `${Math.round(c.pct)}%`;
@@ -1965,7 +1959,6 @@ function pageOverview() {
           <div class="chan-bar"><div style="width:${c.pct}%; background:${c.code ? 'var(--brand)' : 'var(--ink-faint)'}"></div></div>
         </div>`;
       }).join('') : `<div class="empty">Aucune vente sur cette période.</div>`}
-      ${countries.length && countries.every(c => c.code === null) ? `<div class="card-sub" style="margin-top:10px;">Aucun pays reçu pour l'instant — le site doit envoyer un champ <code>country</code> avec ses commandes.</div>` : ''}
     </div>
 
     <div class="section-head"><h2>Évolution</h2><span>Le rythme de vos ventes dans le temps</span></div>
@@ -1983,10 +1976,9 @@ function pageOverview() {
 
     <div class="section-head"><h2>Habitudes</h2><span>Ce qui se répète sur tout votre historique</span></div>
     <div class="card" style="margin-bottom:14px;">
-      <h2>Habitudes de vente</h2>
+      <h2>Habitudes de vente ${habits && habits.sparse ? help("Encore peu d'historique : ces tendances se préciseront à mesure que vos ventes s'accumulent.") : ''}</h2>
       ${habits ? `
         <div class="card-sub">Basé sur tout votre historique — ${fmtNum(habits.totalOrders)} commande${habits.totalOrders !== 1 ? 's' : ''} sur ${fmtNum(habits.spanDays)} jour${habits.spanDays !== 1 ? 's' : ''}</div>
-        ${habits.sparse ? `<div class="callout" style="margin-top:10px;">Encore peu d'historique — ces tendances se préciseront à mesure que vos ventes s'accumulent.</div>` : ''}
         <div style="margin-top:10px; background:var(--brand-soft); color:var(--brand); font-size:13px; padding:10px 13px; border-radius:8px; line-height:1.5;">${habitsInsightText(habits)}</div>
         <div style="display:flex; gap:20px; flex-wrap:wrap; margin-top:14px;">
           <div style="flex:1; min-width:220px;">
@@ -2135,7 +2127,7 @@ function pageVentes() {
 
   return `
     <div class="topbar">
-      <div><h1>Ventes</h1><div class="sub">${fmtNum(state.orders.length)} commandes au total</div></div>
+      <div><h1>Ventes ${help("Cliquez sur une commande pour voir son détail, renseigner ses champs de suivi et consulter l'historique de son statut.")}</h1><div class="sub">${fmtNum(state.orders.length)} commandes au total</div></div>
       <div class="topbar-actions">${themeToggleHTML()}</div>
     </div>
     <div class="card">
@@ -2161,7 +2153,6 @@ function pageVentes() {
         </tr></thead>
         <tbody>${list.map(o => ventesOrderRow(o)).join('')}</tbody>
       </table></div>` : `<div class="empty">Aucune commande ne correspond à ces filtres.</div>`}
-      <div class="card-sub" style="margin-top:10px;">Cliquez sur une commande pour voir le détail et renseigner ses champs de suivi.</div>
     </div>
   `;
 }
@@ -2249,7 +2240,7 @@ function pageExpeditions() {
     </div>`;
   return `
     <div class="topbar">
-      <div><h1>Expéditions du jour</h1><div class="sub">${fmtNum(pending.length)} commande${pending.length !== 1 ? 's' : ''} en cours · ${fmtNum(newToday)} reçue${newToday !== 1 ? 's' : ''} aujourd'hui${lateCount ? ` · <span style="color:var(--critical)">${fmtNum(lateCount)} en retard (2 j et +)</span>` : ''}</div></div>
+      <div><h1>Expéditions du jour ${help("Glissez une carte d'une colonne à l'autre pour la déplacer (déposée dans « Bloquées », on vous demande la raison). Sur téléphone, utilisez les boutons de la carte. Le classement est propre à Comptoir : il ne change rien sur votre plateforme. Une commande quitte la colonne « Prêtes » dès que le transporteur l'a prise en charge : statut expédiée, en cours de livraison, livrée ou retournée, reçu automatiquement de Shopify, WooCommerce ou du site personnalisé (ou via « Marquer expédiée »).")}</h1><div class="sub">${fmtNum(pending.length)} commande${pending.length !== 1 ? 's' : ''} en cours · ${fmtNum(newToday)} reçue${newToday !== 1 ? 's' : ''} aujourd'hui${lateCount ? ` · <span style="color:var(--critical)">${fmtNum(lateCount)} en retard (2 j et +)</span>` : ''}</div></div>
       <div class="topbar-actions">
         <div class="range" title="Ordre des cartes dans chaque colonne">
           <button data-action="setShipSort" data-sort="asc" class="${sortDir === 'asc' ? 'active' : ''}">Plus anciennes d'abord</button>
@@ -2258,7 +2249,6 @@ function pageExpeditions() {
         ${themeToggleHTML()}
       </div>
     </div>
-    <div class="callout" style="margin-bottom:16px;">Glissez une carte d'une colonne à l'autre pour la déplacer (déposée dans « Bloquées », on vous demande la raison). Sur téléphone, utilisez les boutons de la carte. Le classement est propre à Comptoir : il ne change rien sur votre plateforme. Une commande quitte cette page dès qu'elle est livrée ou retournée (automatiquement pour Shopify et WooCommerce, ou via « Marquer expédiée » pour un site personnalisé).</div>
     <div class="ship-board">
       ${col('a_preparer', 'À préparer', sortDir === 'asc' ? 'Les plus anciennes en premier' : 'Les plus récentes en premier', 'warning')}
       ${col('prete', 'Prêtes', 'Emballées, en attente du transporteur', 'good')}
@@ -2266,9 +2256,17 @@ function pageExpeditions() {
     </div>
   `;
 }
+// Every move on the Expéditions board is also logged on the order's history, so the order's
+// detail can replay its whole workflow (prête, bloquée + reason, back to prepare...).
+function logFulfillment(o, stage, extra) {
+  if (!o.history || !o.history.length) o.history = [{ status: o.status, at: o.date }];
+  o.history.push({ stage, at: new Date().toISOString(), source: 'manual', ...(extra || {}) });
+  o.history = o.history.slice(-50);
+}
 function moveToStage(o, stage) {
   o.fulfillment = stage;
   delete o.blockReason; delete o.blockNote; delete o.blockedAt;
+  logFulfillment(o, stage);
   o.updatedAt = new Date().toISOString();
 }
 function openBlockModal(orderId) {
@@ -2290,7 +2288,7 @@ function pageStock() {
   const alerts = stockAlerts().length;
   return `
     <div class="topbar">
-      <div><h1>Stock</h1><div class="sub">${state.products.length} produits · ${alerts} sous le seuil</div></div>
+      <div><h1>Stock ${help('Le stock se déduit automatiquement à chaque vente reçue (et se recrédite en cas de retour) : modifiez-le ici uniquement pour un réassort ou une correction. Prix d\'achat et fournisseur se gèrent dans <a href="#catalogue" style="color:var(--brand)">Mon catalogue</a>.')}</h1><div class="sub">${state.products.length} produits · ${alerts} sous le seuil</div></div>
       <div class="topbar-actions">
         ${themeToggleHTML()}
       </div>
@@ -2309,7 +2307,6 @@ function pageStock() {
             </tr>`).join('')}
         </tbody>
       </table>
-      <div class="card-sub" style="margin-top:10px;">Le stock se déduit automatiquement à chaque vente reçue (et se recrédite en cas de retour) — modifiez-le ici uniquement pour un réassort ou une correction. Prix d'achat et fournisseur se gèrent dans <a href="#catalogue" style="color:var(--brand)">Mon catalogue</a>.</div>
     </div>
   `;
 }
@@ -2377,7 +2374,7 @@ function pageCatalogue() {
   const orphanOrders = state.orders.filter(o => !o.productId);
   return `
     <div class="topbar">
-      <div><h1>Mon catalogue</h1><div class="sub">${fmtNum(state.products.length)} produit${state.products.length !== 1 ? 's' : ''}${missingCost ? ` · ${missingCost} sans prix d'achat` : ''}</div></div>
+      <div><h1>Mon catalogue ${help(`Prix d'achat et prix de revente s'entendent hors taxes (HT) — c'est aussi la base utilisée pour le calcul de marge dans Comptabilité. Quand un produit n'a pas encore de prix de revente, Comptoir suggère le montant de sa dernière vente réelle. « Vendu » et « CA généré » comptent vos commandes déjà reçues (hors retours) pour ce produit. « Importer du site » synchronise depuis les ventes déjà reçues par Comptoir — ce n'est pas une lecture en direct de votre site, seules les commandes déjà transmises via le connecteur y figurent. Ajoutez vos propres colonnes (référence, poids, couleur…) ou importez un fichier CSV pour remplir tout le catalogue d'un coup. Vous pouvez aussi cliquer « Exporter en CSV », compléter les prix dans Excel, puis « Importer un CSV » pour renvoyer le fichier — les produits déjà présents (même nom) seront mis à jour, pas dupliqués.`)}</h1><div class="sub">${fmtNum(state.products.length)} produit${state.products.length !== 1 ? 's' : ''}${missingCost ? ` · ${missingCost} sans prix d'achat` : ''}</div></div>
       <div class="topbar-actions">
         <button class="btn" data-action="importFromSite">Importer du site</button>
         <button class="btn" data-action="exportCatalog">Exporter en CSV</button>
@@ -2423,7 +2420,6 @@ function pageCatalogue() {
           }).join('')}
         </tbody>
       </table></div>` : `<div class="empty">${catalogFilterIncomplete ? 'Tout est déjà complet — aucun produit ne manque de prix d\'achat ou de fournisseur.' : 'Aucun produit — ajoutez-le manuellement, importez un fichier CSV, ou cliquez « Importer du site » si des ventes sont déjà arrivées.'}</div>`}
-      <div class="card-sub" style="margin-top:10px;">Prix d'achat et prix de revente s'entendent hors taxes (HT) — c'est aussi la base utilisée pour le calcul de marge dans Comptabilité. Quand un produit n'a pas encore de prix de revente, Comptoir suggère le montant de sa dernière vente réelle. « Vendu » et « CA généré » comptent vos commandes déjà reçues (hors retours) pour ce produit. « Importer du site » synchronise depuis les ventes déjà reçues par Comptoir — ce n'est pas une lecture en direct de votre site, seules les commandes déjà transmises via le connecteur y figurent. Ajoutez vos propres colonnes (référence, poids, couleur…) ou importez un fichier CSV pour remplir tout le catalogue d'un coup. Vous pouvez aussi cliquer « Exporter en CSV », compléter les prix dans Excel, puis « Importer un CSV » pour renvoyer le fichier — les produits déjà présents (même nom) seront mis à jour, pas dupliqués.</div>
     </div>
   `;
 }
@@ -2563,7 +2559,7 @@ function pageSAV() {
     </tr>`;
   return `
     <div class="topbar">
-      <div><h1>SAV</h1><div class="sub">${open.length} ticket${open.length !== 1 ? 's' : ''} ouvert${open.length !== 1 ? 's' : ''}</div></div>
+      <div><h1>SAV ${help("Cliquez sur un ticket pour voir le détail et renseigner ses champs de suivi.")}</h1><div class="sub">${open.length} ticket${open.length !== 1 ? 's' : ''} ouvert${open.length !== 1 ? 's' : ''}</div></div>
       <div class="topbar-actions"><button class="btn primary" data-action="openAddSavField">+ Ajouter un champ</button>${themeToggleHTML()}</div>
     </div>
     <div class="card">
@@ -2575,7 +2571,6 @@ function pageSAV() {
       <h2>Résolus récemment</h2>
       <div class="table-scroll"><table class="data"><thead>${savTableHead()}</thead><tbody>${resolved.map(renderTicket).join('')}</tbody></table></div>
     </div>` : ''}
-    <div class="card-sub" style="margin-top:10px;">Cliquez sur un ticket pour voir le détail et renseigner ses champs de suivi.</div>
   `;
 }
 
@@ -3193,7 +3188,7 @@ function openOrderDetailModal(orderId) {
       <div class="item"><div class="k">Prix unitaire</div><div class="v">${fmtEUR(o.amount / qty)}</div></div>
       <div class="item"><div class="k">Canal</div><div class="v"><span class="chan-dot"><span class="sw" style="background:${channelColor(o.channelType)}"></span>${connectorLabel(o.channelType)}</span></div></div>
       <div class="item"><div class="k">Référence</div><div class="v">${o.externalId ? `${escapeHTML(o.externalId)} <span style="color:var(--ink-faint);font-size:12px">· Comptoir #${o.orderNumber}</span>` : `#${o.orderNumber}`}</div></div>
-      <div class="item"><div class="k">Statut</div><div class="v">${o.channelType === 'custom' ? `
+      <div class="item"><div class="k">Statut${o.channelType === 'custom' ? help("Un site personnalisé n'a pas de webhook de mise à jour automatique : modifiez le statut ici quand il change réellement sur votre site.") : ''}</div><div class="v">${o.channelType === 'custom' ? `
         <select id="orderStatusSelect" data-order-id="${o.id}">
           <option value="preparation" ${o.status === 'preparation' ? 'selected' : ''}>En préparation</option>
           <option value="livree" ${o.status === 'livree' ? 'selected' : ''}>Livrée</option>
@@ -3202,7 +3197,6 @@ function openOrderDetailModal(orderId) {
       ` : `<span class="status-chip ${cls}"><span class="dot"></span>${label}</span>`}</div></div>
     </div>
     ${fulfillmentOf(o) ? `<div class="card-sub" style="margin-bottom:14px;">Expédition : <b>${{ a_preparer: 'à préparer', prete: 'prête', bloquee: 'bloquée' }[fulfillmentOf(o)]}</b>${o.fulfillment === 'bloquee' ? ` — ${escapeHTML(o.blockReason || '')}${o.blockNote ? ` (${escapeHTML(o.blockNote)})` : ''}` : ''} · <a href="#expeditions" data-action="closeModal" style="color:var(--brand)">Voir les expéditions →</a></div>` : ''}
-    ${o.channelType === 'custom' ? `<div class="card-sub" style="margin-top:-6px; margin-bottom:14px;">Un site personnalisé n'a pas de webhook de mise à jour automatique — modifiez le statut ici quand il change réellement sur votre site.</div>` : ''}
     ${sameCustomer.length > 1 ? `<div class="card-sub" style="margin-bottom:14px;">${escapeHTML(o.customer)} : ${sameCustomer.length} commandes au total, ${fmtEUR(customerTotal)} dépensés (hors retours).</div>` : ''}
     ${receivedData.length ? `
     <div style="border-top:1px solid var(--rule-soft); padding-top:14px; margin-bottom:14px;">
@@ -3210,15 +3204,45 @@ function openOrderDetailModal(orderId) {
       <div class="detail-grid">${receivedData.map(([k, v]) => `<div class="item"><div class="k">${escapeHTML(k)}</div><div class="v">${escapeHTML(v)}</div></div>`).join('')}</div>
     </div>` : ''}
     <div style="border-top:1px solid var(--rule-soft); padding-top:14px; margin-bottom:14px;">
-      <div style="font-size:12.5px; color:var(--ink-faint); margin-bottom:10px;">Historique du statut</div>
+      <div style="font-size:12.5px; color:var(--ink-faint); margin-bottom:12px;">Workflow de la commande</div>
       ${(() => {
-        const hist = (o.history && o.history.length) ? o.history : [{ status: o.status, at: o.date }];
+        const events = (o.history && o.history.length) ? o.history : [{ status: o.status, at: o.date }];
         const t = at => String(at).length <= 10 ? fmtDate(at) : fmtDateTime(at);
-        return `<div class="timeline">${hist.map((h, i) => {
+        const atOf = pred => { const e = events.find(pred); return e ? e.at : null; };
+        const lastFinal = [...events].reverse().find(e => e.status === 'livree' || e.status === 'retour');
+        const isFinal = o.status === 'livree' || o.status === 'retour';
+        const finalLabel = o.status === 'retour' ? 'Retour' : 'Livrée';
+        const steps = [
+          { key: 'recue', label: 'Reçue', at: events[0].at },
+          { key: 'prep', label: 'En préparation', at: atOf(e => e.status === 'preparation') },
+          { key: 'prete', label: 'Prête', at: atOf(e => e.stage === 'prete') },
+          { key: 'final', label: finalLabel, at: isFinal && lastFinal ? lastFinal.at : null, cls: o.status === 'retour' ? 'critical' : 'good' }
+        ];
+        let current = 'recue';
+        if (isFinal) current = 'final';
+        else if (fulfillmentOf(o) === 'prete') current = 'prete';
+        else current = 'prep';
+        const order = ['recue', 'prep', 'prete', 'final'];
+        const stepper = steps.map(st => {
+          const idx = order.indexOf(st.key), cur = order.indexOf(current);
+          const state = st.key === current ? 'current' : (st.at || idx < cur) ? (st.at ? 'done' : 'skipped') : 'todo';
+          const blockedPill = st.key === 'prep' && st.key === current && fulfillmentOf(o) === 'bloquee'
+            ? `<span class="wf-pill">Bloquée${o.blockReason ? ` · ${escapeHTML(o.blockReason)}` : ''}</span>` : '';
+          return `<div class="wf-step ${state} ${st.cls || ''}"><span class="wf-dot"></span><div class="wf-label">${st.label}</div><div class="wf-date">${st.at ? t(st.at) : state === 'skipped' ? 'non passée' : '—'}</div>${blockedPill}</div>`;
+        }).join('');
+        const stageMeta = { prete: ['good', 'Prête'], a_preparer: ['warning', 'Remise à préparer'], bloquee: ['critical', 'Bloquée'] };
+        const rows = events.map((h, i) => {
+          if (h.stage) {
+            const [hc, hl] = stageMeta[h.stage] || ['warning', h.stage];
+            return `<div class="tl-row"><span class="tl-dot ${hc}"></span><div><div class="tl-title"><span class="status-chip ${hc}"><span class="dot"></span>${hl}</span><span class="tl-src">expédition${h.reason ? ` · ${escapeHTML(h.reason)}` : ''}${h.note ? ` (${escapeHTML(h.note)})` : ''}</span></div><div class="tl-date">${t(h.at)}</div></div></div>`;
+          }
           const [hc, hl] = statusMeta(h.status) || ['warning', h.status];
-          const first = i === 0;
-          return `<div class="tl-row"><span class="tl-dot ${hc}"></span><div><div class="tl-title"><span class="status-chip ${hc}"><span class="dot"></span>${hl}</span>${h.source === 'manual' ? '<span class="tl-src">modifié à la main</span>' : ''}</div><div class="tl-date">${first ? 'Commande enregistrée · ' : ''}${t(h.at)}</div></div></div>`;
-        }).join('')}</div>${hist.length === 1 ? '<div class="card-sub" style="margin-top:6px;">Aucun changement de statut depuis la réception de la commande.</div>' : ''}`;
+          return `<div class="tl-row"><span class="tl-dot ${hc}"></span><div><div class="tl-title"><span class="status-chip ${hc}"><span class="dot"></span>${hl}</span>${h.source === 'manual' ? '<span class="tl-src">modifié à la main</span>' : ''}</div><div class="tl-date">${i === 0 ? 'Commande enregistrée · ' : ''}${t(h.at)}</div></div></div>`;
+        }).join('');
+        return `<div class="wf">${stepper}</div>
+          <div class="card-sub" style="margin:14px 0 8px;">Historique détaillé</div>
+          <div class="timeline">${rows}</div>
+          ${events.length === 1 ? '<div class="card-sub" style="margin-top:6px;">Aucun changement depuis la réception de la commande.</div>' : ''}`;
       })()}
     </div>
     <div style="border-top:1px solid var(--rule-soft); padding-top:14px;">
@@ -3307,6 +3331,7 @@ document.addEventListener('click', e => {
       o.blockReason = document.getElementById('blockReason').value;
       o.blockNote = document.getElementById('blockNote').value.trim();
       if (!wasBlocked) o.blockedAt = now;
+      logFulfillment(o, 'bloquee', { reason: o.blockReason, note: o.blockNote });
       closeModal();
       toast(`Commande ${orderDisplayRef(o)} bloquée.`);
     }
@@ -3323,12 +3348,11 @@ document.addEventListener('click', e => {
     el.classList.toggle('flipped', flippedKpis.has(key));
     return;
   }
-  if (action === 'toggleHow') {
-    const id = el.dataset.how;
-    openHows.has(id) ? openHows.delete(id) : openHows.add(id);
-    el.classList.toggle('on', openHows.has(id));
-    const box = document.querySelector(`[data-how-box="${id}"]`);
-    if (box) box.hidden = !openHows.has(id);
+  if (action === 'toggleHelp') {
+    const box = el.closest('.help');
+    const wasOpen = box.classList.contains('open');
+    document.querySelectorAll('.help.open').forEach(h => h.classList.remove('open'));
+    if (!wasOpen) { box.classList.add('open'); placeHelp(box); }
     return;
   }
   if (action === 'toggleTheme') return toggleTheme();
@@ -3796,6 +3820,17 @@ document.addEventListener('click', e => {
     return;
   }
 });
+
+function placeHelp(box) {
+  const pop = box.querySelector('.help-pop');
+  if (!pop) return;
+  box.classList.remove('flip');
+  const r = pop.getBoundingClientRect();
+  if (r.right > window.innerWidth - 10) box.classList.add('flip');
+}
+document.addEventListener('mouseover', e => { const h = e.target.closest && e.target.closest('.help'); if (h) placeHelp(h); });
+document.addEventListener('click', e => { if (!e.target.closest('.help')) document.querySelectorAll('.help.open').forEach(h => h.classList.remove('open')); });
+document.addEventListener('keydown', e => { if (e.key === 'Escape') document.querySelectorAll('.help.open').forEach(h => h.classList.remove('open')); });
 
 // Expéditions board: drag a card into another column. Dropping on "Bloquées" asks for the
 // reason first (a block without one is useless later), so that move goes through the modal.

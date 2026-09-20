@@ -204,9 +204,6 @@ main { flex: 1; padding: 26px 32px 60px; max-width: 1220px; }
 .kpi-hint { float: right; font-size: 11px; opacity: 0; transition: opacity .15s; color: var(--brand); }
 .kpi:hover .kpi-hint, .kpi:focus-visible .kpi-hint { opacity: 1; }
 .kpi:focus-visible .kpi-front { outline: 2px solid var(--brand); outline-offset: 2px; }
-.how-btn { display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; margin-left: 6px; border-radius: 50%; border: 1px solid var(--rule); background: transparent; color: var(--ink-faint); font: italic 700 10px Georgia, serif; cursor: pointer; vertical-align: 1px; padding: 0; }
-.how-btn:hover, .how-btn.on { color: var(--brand); border-color: var(--brand); background: var(--brand-soft); }
-.how-box { font-size: 12.5px; line-height: 1.5; color: var(--ink-soft); background: var(--brand-soft); border-radius: 8px; padding: 9px 12px; margin: 8px 0 10px; }
 @media (prefers-reduced-motion: reduce) { .kpi-inner { transition: none; } }
 .kpi .label { font-size: 12px; color: var(--ink-faint); margin-bottom: 8px; }
 .kpi .row { display: flex; align-items: baseline; justify-content: space-between; }
@@ -392,3 +389,28 @@ table.data tbody tr.row-incomplete:hover { filter: brightness(0.97); }
 .ship-card.dragging { opacity: .4; }
 .ship-col { min-height: 140px; transition: background .12s, border-color .12s; }
 .ship-col.drag-over { background: var(--brand-soft); border-color: var(--brand); border-style: dashed; }
+
+.help { position: relative; display: inline-block; margin-left: 6px; vertical-align: middle; font-size: 12px; font-weight: 400; text-transform: none; letter-spacing: 0; }
+.help-btn { width: 16px; height: 16px; padding: 0; border-radius: 50%; border: 1px solid var(--rule); background: transparent; color: var(--ink-faint); font: 700 10px var(--font); cursor: help; display: inline-flex; align-items: center; justify-content: center; opacity: .75; transition: opacity .15s, color .15s, border-color .15s; }
+.help-btn:hover, .help:focus-within .help-btn, .help.open .help-btn { opacity: 1; color: var(--brand); border-color: var(--brand); background: var(--brand-soft); }
+.help-pop { display: none; position: absolute; z-index: 40; top: calc(100% + 8px); left: -8px; width: max-content; max-width: min(320px, 82vw); max-height: 60vh; overflow-y: auto; background: var(--surface); color: var(--ink-soft); border: 1px solid var(--rule); border-radius: 8px; padding: 10px 12px; font-size: 12.5px; line-height: 1.5; text-align: left; box-shadow: 0 6px 24px rgba(0,0,0,.18); white-space: normal; }
+.help.flip .help-pop { left: auto; right: -8px; }
+.help:hover .help-pop, .help:focus-within .help-pop, .help.open .help-pop { display: block; }
+.card:has(.help:hover), .card:has(.help.open), .card:has(.help:focus-within) { position: relative; z-index: 20; }
+.help-pop a { color: var(--brand); }
+.detail-grid .help { margin-left: 4px; }
+
+.wf { display: flex; align-items: flex-start; }
+.wf-step { flex: 1; min-width: 0; position: relative; display: flex; flex-direction: column; align-items: center; text-align: center; gap: 3px; padding: 0 2px; }
+.wf-step:not(:last-child)::after { content: ''; position: absolute; top: 6px; left: calc(50% + 10px); right: calc(-50% + 10px); height: 2px; background: var(--rule); }
+.wf-step.done:not(:last-child)::after { background: var(--brand); }
+.wf-dot { width: 14px; height: 14px; border-radius: 50%; border: 2px solid var(--rule); background: var(--surface); z-index: 1; }
+.wf-step.done .wf-dot { background: var(--brand); border-color: var(--brand); }
+.wf-step.current .wf-dot { background: var(--surface); border-color: var(--brand); box-shadow: 0 0 0 4px var(--brand-soft); }
+.wf-step.current.good .wf-dot, .wf-step.done.good .wf-dot { background: var(--good); border-color: var(--good); }
+.wf-step.current.critical .wf-dot, .wf-step.done.critical .wf-dot { background: var(--critical); border-color: var(--critical); }
+.wf-step.skipped .wf-dot { border-style: dashed; }
+.wf-label { font-size: 12px; font-weight: 600; margin-top: 4px; }
+.wf-step.todo .wf-label, .wf-step.skipped .wf-label { color: var(--ink-faint); font-weight: 500; }
+.wf-date { font-size: 11px; color: var(--ink-faint); font-family: var(--font-mono); }
+.wf-pill { margin-top: 4px; font-size: 11px; color: var(--critical); background: var(--critical-soft); padding: 2px 7px; border-radius: 10px; }
