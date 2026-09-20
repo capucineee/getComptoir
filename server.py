@@ -2220,7 +2220,33 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 return self._send_json(200, handle_get_state(self._bearer_token()))
             except ApiError as e:
                 return self._send_json(e.status, {"error": e.message})
+        if not self._static_allowed():
+            return self.send_error(404)
         return super().do_GET()
+
+    def do_HEAD(self):
+        if not self._static_allowed():
+            return self.send_error(404)
+        return super().do_HEAD()
+
+    # The static handler serves the whole repo directory, so anything that isn't a public
+    # web asset (server.py, Procfile, requirements.txt, dotfiles, any database file) must be
+    # refused explicitly — an allowlist of extensions rather than a list of known-bad names.
+    _PUBLIC_EXT = {".html", ".css", ".js", ".json", ".png", ".jpg", ".jpeg", ".svg", ".ico", ".webp", ".xml", ".txt", ".woff2", ".webmanifest"}
+    _PRIVATE_NAMES = {"requirements.txt"}
+
+    def _static_allowed(self):
+        raw = urllib.parse.unquote(urllib.parse.urlparse(self.path).path)
+        parts = [x for x in raw.split("/") if x]
+        if any(x.startswith(".") or x == "__pycache__" for x in parts):
+            return False
+        fs_path = self.translate_path(self.path)
+        if os.path.isdir(fs_path):
+            return True
+        name = os.path.basename(fs_path).lower()
+        if name in self._PRIVATE_NAMES:
+            return False
+        return os.path.splitext(name)[1] in self._PUBLIC_EXT
 
     def do_PUT(self):
         path = urllib.parse.urlparse(self.path).path
