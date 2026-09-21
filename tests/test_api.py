@@ -436,16 +436,6 @@ class TestNotifications(ServerCase):
         finally:
             self.srv._paris_now = real
 
-    def test_preview_and_test_endpoints(self):
-        self.assertEqual(self.api.call("/api/notifications/preview?type=sale")[0], 401)
-        s, j = self.api.call("/api/notifications/preview?type=digest", token=self.acc["token"])
-        self.assertEqual(s, 200)
-        self.assertIn("<html", j["html"])
-        self.assertIn("Rupture", j["html"])
-        s, j = self.api.call("/api/notifications/preview?type=monthly", token=self.acc["token"])
-        self.assertIn("dépendent des données saisies", j["html"])
-        self.assertEqual(self.api.call("/api/notifications/test", "POST", {"type": "sale"}, self.acc["token"])[0], 404)  # no test-mail endpoint
-
     def test_html_in_data_is_escaped_in_the_email(self):
         self.ing({"externalId": "XS1", "amount": 10, "customerName": "<script>alert(1)</script>"})
         self.flush()

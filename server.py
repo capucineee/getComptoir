@@ -2567,18 +2567,6 @@ def process_monthly_summaries():
         conn.close()
 
 
-def handle_notification_preview(token, params):
-    user = user_from_token(token)
-    if not user:
-        raise ApiError(401, "Session invalide ou expirée.")
-    kind = params.get("type", "digest")
-    if kind == "monthly":
-        subject, _text, html_body = build_monthly_email(_sample_month_summary())
-    else:
-        subject, _text, html_body = build_notification_email(_sample_events(kind))
-    return {"subject": subject, "html": html_body}
-
-
 def _paris_now():
     try:
         from zoneinfo import ZoneInfo
@@ -2847,12 +2835,6 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if path == "/api/me":
             try:
                 return self._send_json(200, handle_me(self._bearer_token()))
-            except ApiError as e:
-                return self._send_json(e.status, {"error": e.message})
-        if path == "/api/notifications/preview":
-            try:
-                params = {k: v[0] for k, v in urllib.parse.parse_qs(parsed.query).items()}
-                return self._send_json(200, handle_notification_preview(self._bearer_token(), params))
             except ApiError as e:
                 return self._send_json(e.status, {"error": e.message})
         if path == "/api/launch":

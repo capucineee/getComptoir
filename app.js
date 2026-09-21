@@ -2969,12 +2969,6 @@ function pageParametres() {
         <button data-action="setNotifFrequency" data-frequency="instant" class="${state.notifications.frequency === 'instant' ? 'active' : ''}">Dès que possible (regroupé)</button>
         <button data-action="setNotifFrequency" data-frequency="daily" class="${state.notifications.frequency === 'daily' ? 'active' : ''}">Résumé quotidien à 8 h</button>
       </div>
-      <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:16px;">
-        <button class="btn" data-action="previewNotif" data-type="sale">Modèle : vente</button>
-        <button class="btn" data-action="previewNotif" data-type="stock">Modèle : stock</button>
-        <button class="btn" data-action="previewNotif" data-type="digest">Modèle : résumé</button>
-        <button class="btn" data-action="previewNotif" data-type="monthly">Modèle : bilan mensuel</button>
-      </div>
     </div>
     <div class="card" style="margin-top:14px;">
       <h2>Mes données ${help("Conformément au RGPD, vous pouvez récupérer toutes les données de votre compte, ou le supprimer définitivement. La suppression efface vos commandes, produits, connecteurs et clés, et résilie votre abonnement. Les factures restent conservées chez Stripe pour les obligations comptables, et les sauvegardes chiffrées disparaissent à leur rotation.")}</h2>
@@ -3439,17 +3433,6 @@ document.addEventListener('click', e => {
     state.notifications.configured = true;
     persist(); render();
     toast(state.notifications.frequency === 'daily' ? 'Résumé quotidien à 8 h activé.' : 'Notifications regroupées, dès que possible.');
-    return;
-  }
-  if (action === 'previewNotif') {
-    const session = getSession();
-    apiRequest(`/api/notifications/preview?type=${encodeURIComponent(el.dataset.type)}`, { token: session.token }).then(r => {
-      openModal(`<h3>Aperçu de l'email</h3><div class="modal-sub">Objet : ${escapeHTML(r.subject)}</div>
-        <iframe id="notifPreview" sandbox title="Aperçu de l'email" style="width:100%; height:520px; border:1px solid var(--rule-soft); border-radius:8px; background:#fff;"></iframe>
-        <div class="actions"><button class="btn primary" data-action="closeModal">Fermer</button></div>`);
-      document.querySelector('#modalRoot .modal').style.maxWidth = '580px';
-      document.getElementById('notifPreview').srcdoc = r.html;
-    }).catch(err => toast(err.message, true));
     return;
   }
   if (action === 'exportMyData') {
