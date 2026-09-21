@@ -493,3 +493,4 @@ table.data tbody tr.row-incomplete:hover { filter: brightness(0.97); }
 .switch input:checked + i::after { transform: translateX(18px); }
 .switch input:focus-visible + i { outline: 2px solid var(--brand); outline-offset: 2px; }
 @media (prefers-reduced-motion: reduce) { .switch i, .switch i::after { transition: none; } }
+#landingRoot .l-plan-trial { align-self: flex-start; font-size: 12px; font-weight: 700; color: var(--brand); background: var(--brand-soft); padding: 4px 10px; border-radius: 20px; margin: -4px 0 2px; }

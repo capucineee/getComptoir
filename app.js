@@ -689,7 +689,7 @@ function renderLanding() {
               ${closed ? `<a class="l-btn-cta primary" href="#l-tarifs">Voir les tarifs</a><button class="l-btn-cta ghost" data-action="authSwitch" data-mode="login" type="button">Se connecter</button>` : `<button class="l-btn-cta primary" data-action="authSwitch" data-mode="signup" type="button">Créer un compte</button>
               <a class="l-btn-cta ghost" href="#l-tarifs">Voir les tarifs</a>`}
             </div>
-            <div class="l-hero-note">Installation en quelques minutes. Sans engagement de durée.</div>
+            <div class="l-hero-note">${launch.trialDays > 0 ? '1er mois offert. ' : ''}Installation en quelques minutes. Sans engagement de durée.</div>
           </div>
         </div>
         <svg class="l-hero-chart" viewBox="0 0 500 340" preserveAspectRatio="xMidYMid meet" aria-hidden="true">
@@ -870,12 +870,13 @@ function renderLanding() {
                 ${key === 'multicanal' ? '<span class="l-plan-tag">Le plus choisi</span>' : ''}
                 <div class="l-plan-name">${p.name}</div>
                 <div class="l-plan-price">${fmtEUR(p.price)}<span>/mois</span></div>
+                ${launch.trialDays > 0 ? `<div class="l-plan-trial">1er mois offert</div>` : ''}
                 <ul class="l-plan-list"><li>${p.channels === Infinity ? 'Canaux illimités' : p.channels + ' canal' + (p.channels > 1 ? 'aux' : '')}</li><li>${fmtNum(p.orders)} commandes / mois</li></ul>
-                ${closed ? `<button class="l-plan-cta" type="button" disabled style="opacity:.55; cursor:default;">Bientôt disponible</button>` : `<button class="l-plan-cta" data-action="authSwitch" data-mode="signup" type="button">Choisir ${p.name}</button>`}
+                ${closed ? `<button class="l-plan-cta" type="button" disabled style="opacity:.55; cursor:default;">Bientôt disponible</button>` : `<button class="l-plan-cta" data-action="authSwitch" data-mode="signup" type="button">${launch.trialDays > 0 ? 'Essayer 1 mois offert' : `Choisir ${p.name}`}</button>`}
               </div>
             `).join('')}
           </div>
-          <div class="l-plan-note">Résiliable à tout moment, sans engagement de durée.</div>
+          <div class="l-plan-note">${launch.trialDays > 0 ? `${launch.trialDays} jours offerts sur chaque forfait, une carte bancaire est demandée à l'inscription mais n'est débitée qu'à la fin de l'essai. ` : ''}Résiliable à tout moment, sans engagement de durée.</div>
         </div>
       </section>
 
@@ -898,6 +899,10 @@ function renderLanding() {
               <h3>Comment mes commandes arrivent-elles dans Comptoir ?</h3>
               <p>Vous générez une clé API depuis l'app, que votre site (ou celui de votre développeur) utilise pour transmettre chaque commande dès qu'elle a lieu.</p>
             </div>
+            ${launch.trialDays > 0 ? `<div class="l-faq-item">
+              <h3>Comment fonctionne le mois offert ?</h3>
+              <p>Vous profitez de Comptoir gratuitement pendant ${launch.trialDays} jours. Une carte bancaire est demandée dès que vous choisissez votre forfait, mais elle n'est débitée qu'à la fin de l'essai. Si vous résiliez avant, vous ne payez rien. Le mois offert est réservé à un premier abonnement par client.</p>
+            </div>` : ''}
             <div class="l-faq-item">
               <h3>Puis-je changer de forfait ou résilier à tout moment ?</h3>
               <p>Oui, sans engagement de durée — vous changez de forfait ou arrêtez quand vous voulez depuis Facturation.</p>
@@ -941,11 +946,11 @@ function renderLanding() {
 
 /* ---------- pre-launch gate: sign-ups closed until the launch date, with a countdown ---------- */
 const LAUNCH_FALLBACK = '2026-09-28T09:00:00+02:00';
-let launch = { at: new Date(LAUNCH_FALLBACK).getTime(), offset: 0, open: false, loaded: false };
+let launch = { at: new Date(LAUNCH_FALLBACK).getTime(), offset: 0, open: false, loaded: false, trialDays: 30 };
 async function loadLaunch() {
   try {
     const r = await apiRequest('/api/launch');
-    launch = { at: new Date(r.launchAt).getTime(), offset: new Date(r.serverNow).getTime() - Date.now(), open: !!r.open, loaded: true };
+    launch = { at: new Date(r.launchAt).getTime(), offset: new Date(r.serverNow).getTime() - Date.now(), open: !!r.open, loaded: true, trialDays: r.trialDays ?? 30 };
   } catch (e) { launch.open = Date.now() >= launch.at; }
 }
 const launchOpen = () => launch.open || (Date.now() + launch.offset) >= launch.at;
@@ -1159,6 +1164,7 @@ async function boot() {
     // gets persisted back.
     state.plan = { tier: me.plan.tier, status: me.plan.status, renewsAt: me.plan.renewsAt, freeForever: me.plan.freeForever };
     state.emailVerified = me.emailVerified;
+    state.trial = me.trial || { days: 0, eligible: false };
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
   } catch (err) {
     console.error('Impossible de charger les données depuis le serveur, utilisation du cache local.', err);
@@ -2697,7 +2703,7 @@ function pageFacturation() {
   const meta = tier ? PLAN_META[tier] : null;
   const freeForever = !!state.plan.freeForever;
   const statusLabel = { active: 'Actif', past_due: 'Paiement en retard', canceled: 'Résilié', unpaid: 'Impayé', trialing: 'Essai' }[state.plan.status] || state.plan.status;
-  const statusClass = state.plan.status === 'active' ? 'good' : state.plan.status === 'past_due' || state.plan.status === 'unpaid' ? 'critical' : 'warning';
+  const statusClass = (state.plan.status === 'active' || state.plan.status === 'trialing') ? 'good' : state.plan.status === 'past_due' || state.plan.status === 'unpaid' ? 'critical' : 'warning';
   return `
     <div class="topbar">
       <div><h1>Facturation</h1><div class="sub">Forfait actuel : ${meta ? meta.name : 'Aucun'}</div></div>
@@ -2709,7 +2715,7 @@ function pageFacturation() {
       <div class="card-head">
         <div>
           <h2>Forfait ${meta.name}</h2>
-          <div class="card-sub">${freeForever ? 'Accès gratuit permanent' : state.plan.renewsAt ? `Renouvellement le ${fmtDate(state.plan.renewsAt)}` : 'Géré via Stripe'}</div>
+          <div class="card-sub">${freeForever ? 'Accès gratuit permanent' : state.plan.status === 'trialing' && state.plan.renewsAt ? `Mois offert jusqu'au ${fmtDate(state.plan.renewsAt)}, puis ${fmtEUR(meta.price)} / mois` : state.plan.renewsAt ? `Renouvellement le ${fmtDate(state.plan.renewsAt)}` : 'Géré via Stripe'}</div>
         </div>
         <span class="status-chip ${statusClass}"><span class="dot"></span>${freeForever ? 'Gratuit' : statusLabel}</span>
       </div>
@@ -2719,7 +2725,7 @@ function pageFacturation() {
       ${!freeForever ? `<button class="btn" data-action="openBillingPortal">Gérer mon abonnement</button>` : ''}
       ` : `
       <div class="card-head">
-        <div><h2>Aucun forfait actif</h2><div class="card-sub">Choisissez un forfait ci-dessous pour connecter des canaux et faire remonter de vraies commandes.</div></div>
+        <div><h2>Aucun forfait actif</h2><div class="card-sub">Choisissez un forfait ci-dessous pour connecter des canaux et faire remonter de vraies commandes.${state.trial && state.trial.eligible ? ` <b>Votre premier mois est offert</b> : la carte est demandée maintenant mais n'est débitée qu'après ${state.trial.days} jours.` : ''}</div></div>
         <span class="status-chip warning"><span class="dot"></span>Inactif</span>
       </div>
       `}
@@ -2735,7 +2741,7 @@ function pageFacturation() {
             <li>${p.channels === Infinity ? 'Canaux illimités' : p.channels + ' canaux'}</li>
             <li>${fmtNum(p.orders)} commandes/mois</li>
           </ul>
-          ${key === tier ? `<button class="btn" disabled>Forfait actuel</button>` : freeForever ? `<button class="btn" disabled title="Accès gratuit permanent">—</button>` : `<button class="btn primary" data-action="openCheckout" data-tier="${key}">Choisir ce forfait</button>`}
+          ${key === tier ? `<button class="btn" disabled>Forfait actuel</button>` : freeForever ? `<button class="btn" disabled title="Accès gratuit permanent">—</button>` : `<button class="btn primary" data-action="openCheckout" data-tier="${key}">${!tier && state.trial && state.trial.eligible ? 'Essayer 1 mois offert' : 'Choisir ce forfait'}</button>`}
         </div>
       `).join('')}
     </div>
@@ -2964,7 +2970,6 @@ function pageParametres() {
         <button data-action="setNotifFrequency" data-frequency="daily" class="${state.notifications.frequency === 'daily' ? 'active' : ''}">Résumé quotidien à 8 h</button>
       </div>
       <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:16px;">
-        <button class="btn" data-action="sendTestNotif" data-type="sale">Envoyer un email de test (vente)</button>
         <button class="btn" data-action="previewNotif" data-type="sale">Modèle : vente</button>
         <button class="btn" data-action="previewNotif" data-type="stock">Modèle : stock</button>
         <button class="btn" data-action="previewNotif" data-type="digest">Modèle : résumé</button>
@@ -3159,7 +3164,9 @@ async function openCheckoutModal(tier) {
   const p = PLAN_META[tier];
   openModal(`
     <h3>Passer au forfait ${p.name}</h3>
-    <div class="modal-sub">${fmtEUR(p.price)} / mois, résiliable à tout moment.</div>
+    <div class="modal-sub">${state.trial && state.trial.eligible && !state.plan.tier
+      ? `Premier mois offert, puis ${fmtEUR(p.price)} / mois. Votre carte est demandée maintenant mais n'est débitée que le ${new Date(Date.now() + state.trial.days * 86400000).toLocaleDateString('fr-FR', { day: 'numeric', month: 'long' })}. Résiliable avant cette date, sans frais.`
+      : `${fmtEUR(p.price)} / mois, résiliable à tout moment.`}</div>
     <div id="checkoutBody" style="text-align:center; padding:10px 0 4px;">
       <span class="spinner" style="border-top-color:var(--brand); border-color:var(--rule-soft);"></span>
       <div style="margin-top:10px; font-size:13px; color:var(--ink-soft);">Redirection vers le paiement sécurisé…</div>
@@ -3434,19 +3441,12 @@ document.addEventListener('click', e => {
     toast(state.notifications.frequency === 'daily' ? 'Résumé quotidien à 8 h activé.' : 'Notifications regroupées, dès que possible.');
     return;
   }
-  if (action === 'sendTestNotif') {
-    const session = getSession();
-    apiRequest('/api/notifications/test', { method: 'POST', token: session.token, body: { type: el.dataset.type || 'digest' } })
-      .then(r => toast(r.sent ? `Email de test envoyé à ${r.to}.` : 'Envoi d\'email non configuré sur ce serveur (mode local).', !r.sent))
-      .catch(err => toast(err.message, true));
-    return;
-  }
   if (action === 'previewNotif') {
     const session = getSession();
     apiRequest(`/api/notifications/preview?type=${encodeURIComponent(el.dataset.type)}`, { token: session.token }).then(r => {
       openModal(`<h3>Aperçu de l'email</h3><div class="modal-sub">Objet : ${escapeHTML(r.subject)}</div>
         <iframe id="notifPreview" sandbox title="Aperçu de l'email" style="width:100%; height:520px; border:1px solid var(--rule-soft); border-radius:8px; background:#fff;"></iframe>
-        <div class="actions"><button class="btn" data-action="sendTestNotif" data-type="${escapeHTML(el.dataset.type)}">M'envoyer ce modèle par email</button><button class="btn primary" data-action="closeModal">Fermer</button></div>`);
+        <div class="actions"><button class="btn primary" data-action="closeModal">Fermer</button></div>`);
       document.querySelector('#modalRoot .modal').style.maxWidth = '580px';
       document.getElementById('notifPreview').srcdoc = r.html;
     }).catch(err => toast(err.message, true));

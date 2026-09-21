@@ -444,8 +444,7 @@ class TestNotifications(ServerCase):
         self.assertIn("Rupture", j["html"])
         s, j = self.api.call("/api/notifications/preview?type=monthly", token=self.acc["token"])
         self.assertIn("dépendent des données saisies", j["html"])
-        self.assertEqual(self.api.call("/api/notifications/test", "POST", {"type": "sale"}, self.acc["token"])[0], 200)
-        self.assertEqual(self.api.call("/api/notifications/test", "POST", {"type": "sale"}, self.acc["token"])[0], 429)
+        self.assertEqual(self.api.call("/api/notifications/test", "POST", {"type": "sale"}, self.acc["token"])[0], 404)  # no test-mail endpoint
 
     def test_html_in_data_is_escaped_in_the_email(self):
         self.ing({"externalId": "XS1", "amount": 10, "customerName": "<script>alert(1)</script>"})
@@ -453,6 +452,60 @@ class TestNotifications(ServerCase):
         # the queued payload is rendered with escaping: no raw tag in the HTML template
         _, _, html_body = self.srv.build_notification_email([{"kind": "sale", "customer": "<script>alert(1)</script>", "amount": 1, "channel": "<b>x</b>"}])
         self.assertNotIn("<script>alert(1)</script>", html_body)
+
+
+class TestTrial(ServerCase):
+    """Free first month: checked in-process by capturing what is sent to Stripe."""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        import importlib.util
+        os.environ["COMPTOIR_DB_PATH"] = cls.db
+        spec = importlib.util.spec_from_file_location("srv_trial", os.path.join(ROOT, "server.py"))
+        cls.srv = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.srv)
+        cls.calls = []
+        cls.srv.STRIPE_PRICE_IDS = {"multicanal": "price_test"}
+        cls.srv.stripe_request = lambda method, path, data=None: (cls.calls.append((method, path, data)) or {"id": "cus_1", "url": "https://checkout.example/x"})
+        cls.srv.verify_stripe_signature = lambda payload, sig: True
+
+    def account(self):
+        email = f"t{secrets.token_hex(4)}@example.com"
+        s, j = self.api.call("/api/signup", "POST", {"email": email, "password": "Passw0rd!x", "acceptTerms": True})
+        self.sql("update users set email_verified_at=datetime('now') where email=?", email)
+        return email, j["token"]
+
+    def test_first_checkout_has_a_30_day_trial_with_card_upfront(self):
+        email, tok = self.account()
+        self.calls.clear()
+        self.srv.handle_billing_checkout(tok, {"tier": "multicanal"})
+        session = [c for c in self.calls if c[1] == "/checkout/sessions"][0][2]
+        self.assertEqual(session["subscription_data"]["trial_period_days"], 30)
+        self.assertEqual(session["subscription_data"]["trial_settings"]["end_behavior"]["missing_payment_method"], "cancel")
+        self.assertEqual(session["payment_method_collection"], "always")
+        self.assertEqual(session["metadata"]["comptoir_trial"], "1")
+        me = self.api.call("/api/me", token=tok)[1]
+        self.assertEqual(me["trial"], {"days": 30, "eligible": True})
+
+    def test_trial_is_consumed_once(self):
+        email, tok = self.account()
+        uid = self.sql("select id from users where email=?", email)[0][0]
+        event = {"type": "checkout.session.completed", "data": {"object": {"metadata": {"comptoir_user_id": uid, "comptoir_tier": "multicanal", "comptoir_trial": "1"}, "subscription": "sub_1", "customer": "cus_1"}}}
+        self.srv.handle_stripe_webhook(json.dumps(event).encode(), "sig")
+        row = self.sql("select plan_tier, plan_status, trial_used_at from users where id=?", uid)[0]
+        self.assertEqual((row[0], row[1]), ("multicanal", "trialing"))
+        self.assertIsNotNone(row[2])
+        self.assertFalse(self.api.call("/api/me", token=tok)[1]["trial"]["eligible"])
+        self.sql("update users set plan_tier=NULL, stripe_subscription_id=NULL where id=?", uid)   # cancelled, comes back later
+        self.calls.clear()
+        self.srv.handle_billing_checkout(tok, {"tier": "multicanal"})
+        session = [c for c in self.calls if c[1] == "/checkout/sessions"][0][2]
+        self.assertNotIn("trial_period_days", session["subscription_data"])
+        self.assertEqual(session["metadata"]["comptoir_trial"], "0")
+
+    def test_launch_endpoint_announces_trial_length(self):
+        self.assertEqual(self.api.call("/api/launch")[1]["trialDays"], 30)
 
 
 class TestPreLaunch(ServerCase):

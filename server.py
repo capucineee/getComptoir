@@ -44,6 +44,10 @@ EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 PBKDF2_ITERATIONS = 100_000
 SESSION_TTL_DAYS = 30
 
+# Free first month: Stripe runs a trial of TRIAL_DAYS on the first subscription of an account
+# (card collected up front, charged only when the trial ends). 0 switches the offer off.
+TRIAL_DAYS = int(os.environ.get("TRIAL_DAYS") or 30)
+
 # Pre-launch gate: new sign-ups are refused until LAUNCH_AT (existing accounts keep logging
 # in). Set LAUNCH_AT (ISO 8601) on the host to move the date; SIGNUP_ALLOWLIST (comma-
 # separated emails) lets specific people create an account early, e.g. for a demo or test.
@@ -64,7 +68,7 @@ def launch_is_open():
 
 
 def handle_launch():
-    return {"launchAt": _launch_at().astimezone(timezone.utc).isoformat(), "serverNow": datetime.now(timezone.utc).isoformat(), "open": launch_is_open()}
+    return {"launchAt": _launch_at().astimezone(timezone.utc).isoformat(), "serverNow": datetime.now(timezone.utc).isoformat(), "open": launch_is_open(), "trialDays": TRIAL_DAYS}
 PASSWORD_RESET_TTL_MINUTES = 60
 # Where reset links point. Kept as an explicit env var rather than trusting the request's
 # Host header (which can be spoofed or, behind a proxy, wrong) — same reasoning as
@@ -171,7 +175,7 @@ def branded_email_html(heading: str, body_html: str, footnote: str, cta_label: s
 # client-supplied version would let anyone claim they accepted a version they never actually
 # saw. Bump this string (matches the "Dernière mise à jour" date on the legal pages) whenever
 # the terms/privacy policy change materially.
-CONSENT_VERSION = "2026-09-09"
+CONSENT_VERSION = "2026-09-21"
 
 # Server-authoritative mirror of app.js's PLAN_META — limits are enforced HERE, not in the
 # client, since a client can always be edited to lie about its own plan. `channels` is the
@@ -441,6 +445,9 @@ def init_db():
     # Shopify-style OAuth (WooCommerce today). Existing rows default to 'custom', which is
     # exactly what they already were.
     notif_cols = {row["name"] for row in conn.execute("PRAGMA table_info(notification_state)")}
+    user_cols = {row["name"] for row in conn.execute("PRAGMA table_info(users)")}
+    if "trial_used_at" not in user_cols:
+        conn.execute("ALTER TABLE users ADD COLUMN trial_used_at TEXT")
     if "last_monthly" not in notif_cols:
         conn.execute("ALTER TABLE notification_state ADD COLUMN last_monthly TEXT")
     api_keys_cols = {row["name"] for row in conn.execute("PRAGMA table_info(api_keys)")}
@@ -845,6 +852,7 @@ def handle_me(token):
         raise ApiError(401, "Session invalide ou expirée.")
     user["plan"] = resolve_plan(user)
     user["emailVerified"] = user["email_verified_at"] is not None
+    user["trial"] = {"days": TRIAL_DAYS, "eligible": _trial_eligible(user["id"]) and user["email"] not in FREE_FOREVER_EMAILS}
     return user
 
 
@@ -1620,6 +1628,16 @@ def _get_or_create_stripe_customer(conn, user) -> str:
     return customer["id"]
 
 
+def _trial_eligible(user_id):
+    """One free month per account, and only for someone who has never subscribed."""
+    if TRIAL_DAYS <= 0:
+        return False
+    conn = get_db()
+    row = conn.execute("SELECT trial_used_at, stripe_subscription_id, plan_tier FROM users WHERE id = ?", (user_id,)).fetchone()
+    conn.close()
+    return bool(row) and not row["trial_used_at"] and not row["stripe_subscription_id"] and not row["plan_tier"]
+
+
 def handle_billing_checkout(token, body):
     user = user_from_token(token)
     if not user:
@@ -1634,6 +1652,12 @@ def handle_billing_checkout(token, body):
     conn = get_db()
     customer_id = _get_or_create_stripe_customer(conn, user)
     conn.close()
+    trial = _trial_eligible(user["id"])
+    subscription_data = {"metadata": {"comptoir_user_id": user["id"], "comptoir_tier": tier}}
+    if trial:
+        subscription_data["trial_period_days"] = TRIAL_DAYS
+        # No card at the end of the trial = the subscription simply stops, never a surprise charge.
+        subscription_data["trial_settings"] = {"end_behavior": {"missing_payment_method": "cancel"}}
     session = stripe_request("POST", "/checkout/sessions", {
         "mode": "subscription",
         "customer": customer_id,
@@ -1644,8 +1668,9 @@ def handle_billing_checkout(token, body):
         # param belongs, same convention as the password-reset link.
         "success_url": f"{PUBLIC_BASE_URL}/?checkout=success#facturation",
         "cancel_url": f"{PUBLIC_BASE_URL}/?checkout=cancel#facturation",
-        "metadata": {"comptoir_user_id": user["id"], "comptoir_tier": tier},
-        "subscription_data": {"metadata": {"comptoir_user_id": user["id"], "comptoir_tier": tier}},
+        "payment_method_collection": "always",
+        "metadata": {"comptoir_user_id": user["id"], "comptoir_tier": tier, "comptoir_trial": "1" if trial else "0"},
+        "subscription_data": subscription_data,
     })
     return {"url": session["url"]}
 
@@ -1702,9 +1727,10 @@ def handle_stripe_webhook(payload: bytes, sig_header: str | None):
         subscription_id = obj.get("subscription")
         customer_id = obj.get("customer")
         if user_id and tier:
+            trial = obj.get("metadata", {}).get("comptoir_trial") == "1"
             conn.execute(
-                "UPDATE users SET plan_tier = ?, plan_status = 'active', stripe_subscription_id = ?, stripe_customer_id = COALESCE(stripe_customer_id, ?) WHERE id = ?",
-                (tier, subscription_id, customer_id, user_id),
+                "UPDATE users SET plan_tier = ?, plan_status = ?, stripe_subscription_id = ?, stripe_customer_id = COALESCE(stripe_customer_id, ?), trial_used_at = CASE WHEN ? THEN COALESCE(trial_used_at, datetime('now')) ELSE trial_used_at END WHERE id = ?",
+                (tier, "trialing" if trial else "active", subscription_id, customer_id, 1 if trial else 0, user_id),
             )
             conn.commit()
 
@@ -2215,7 +2241,6 @@ NOTIFY_MIN_GAP_SECONDS = 300      # instant mode: at most one email every 5 minu
 NOTIFY_DIGEST_HOUR = 8            # daily mode: sent once a day from 08:00 (Paris)
 NOTIFY_MAX_ITEMS = 10             # rows listed per section, the rest is summarised
 NOTIFY_RECENT_DAYS = 3            # a backfilled old order is history, not news
-_TEST_MAIL_LAST = {}
 
 
 def notify_prefs(data):
@@ -2554,23 +2579,6 @@ def handle_notification_preview(token, params):
     return {"subject": subject, "html": html_body}
 
 
-def handle_notification_test(token, body=None):
-    user = user_from_token(token)
-    if not user:
-        raise ApiError(401, "Session invalide ou expirée.")
-    now = time.time()
-    if now - _TEST_MAIL_LAST.get(user["id"], 0) < 30:
-        raise ApiError(429, "Un email de test vient d'être envoyé : patientez quelques secondes.")
-    _TEST_MAIL_LAST[user["id"]] = now
-    kind = (body or {}).get("type", "digest") if isinstance(body, dict) else "digest"
-    if kind == "monthly":
-        subject, text, html_body = build_monthly_email(_sample_month_summary())
-    else:
-        subject, text, html_body = build_notification_email(_sample_events(kind))
-    send_email(user["email"], "[Test] " + subject, text, html_body)
-    return {"ok": True, "sent": bool(BREVO_API_KEY), "to": user["email"]}
-
-
 def _paris_now():
     try:
         from zoneinfo import ZoneInfo
@@ -2800,8 +2808,6 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 return self._send_json(200, handle_create_connector(self._bearer_token(), body))
             if path == "/api/connectors/channel":
                 return self._send_json(200, handle_connect_channel(self._bearer_token(), body))
-            if path == "/api/notifications/test":
-                return self._send_json(200, handle_notification_test(self._bearer_token(), body))
             if path == "/api/tracking/site":
                 return self._send_json(200, handle_tracking_site(self._bearer_token(), body))
             if path == "/api/ingest/orders":
