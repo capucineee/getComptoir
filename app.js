@@ -585,7 +585,8 @@ function renderLanding() {
 
         #landingRoot .l-product { padding: 80px 0; }
         #landingRoot .l-product-shot { border: 1px solid var(--rule-soft); border-radius: 16px; overflow: hidden; box-shadow: 0 24px 64px -24px rgba(20,30,22,0.22); }
-        #landingRoot .l-product-shot img { width: 100%; display: block; }
+        #landingRoot .l-product-shot img { width: 100%; height: auto; display: block; }
+        @media (max-width: 760px) { #landingRoot .l-product-shot { max-width: 340px; margin: 0 auto; border-radius: 22px; } }
         #landingRoot .l-product-cap { text-align: center; font-size: 13px; color: var(--ink-faint); margin-top: 16px; }
 
         #landingRoot .l-features { padding: 80px 0; background: var(--surface-sunken); border-top: 1px solid var(--rule-soft); border-bottom: 1px solid var(--rule-soft); }
@@ -742,7 +743,10 @@ function renderLanding() {
             <h2 class="l-section-h">Ce que vous voyez à la connexion</h2>
             <p class="l-section-sub">Capture d'écran réelle de Vue d'ensemble — pas une maquette.</p>
           </div>
-          <div class="l-product-shot"><img src="/landing-dashboard-shot.png" alt="Tableau de bord Comptoir : chiffre d'affaires, commandes, panier moyen, taux de retour et graphique de ventes multicanal" loading="lazy" width="1180" height="620"></div>
+          <div class="l-product-shot"><picture>
+            <source media="(max-width: 760px)" srcset="/landing-dashboard-mobile.webp" type="image/webp" width="780" height="2020">
+            <img src="/landing-dashboard-shot.png" alt="Tableau de bord Comptoir : chiffre d'affaires, commandes, panier moyen, taux de retour et ce qu'il vous reste après TVA, coûts et charges" loading="lazy" width="1180" height="620">
+          </picture></div>
           <p class="l-product-cap">Vue d'ensemble — chiffre d'affaires, commandes et répartition par canal en un coup d'œil.</p>
         </div>
       </section>
