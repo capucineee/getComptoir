@@ -440,6 +440,9 @@ def init_db():
     # it to any real integration that authenticates with a plain shared secret rather than
     # Shopify-style OAuth (WooCommerce today). Existing rows default to 'custom', which is
     # exactly what they already were.
+    notif_cols = {row["name"] for row in conn.execute("PRAGMA table_info(notification_state)")}
+    if "last_monthly" not in notif_cols:
+        conn.execute("ALTER TABLE notification_state ADD COLUMN last_monthly TEXT")
     api_keys_cols = {row["name"] for row in conn.execute("PRAGMA table_info(api_keys)")}
     if "channel_type" not in api_keys_cols:
         conn.execute("ALTER TABLE api_keys ADD COLUMN channel_type TEXT NOT NULL DEFAULT 'custom'")
@@ -2206,7 +2209,7 @@ def handle_health():
 # never mean 500 emails. Preferences live in the account's state document
 # (data["notifications"]) so the Paramètres screen and the server share one source of truth.
 # ---------------------------------------------------------------------------------------
-NOTIFY_DEFAULTS = {"sales": True, "stock": True, "frequency": "instant"}
+NOTIFY_DEFAULTS = {"sales": False, "stock": False, "monthly": False, "frequency": "instant"}  # opt-in
 NOTIFY_COALESCE_SECONDS = 120     # wait a little so a burst of orders becomes one email
 NOTIFY_MIN_GAP_SECONDS = 300      # instant mode: at most one email every 5 minutes
 NOTIFY_DIGEST_HOUR = 8            # daily mode: sent once a day from 08:00 (Paris)
@@ -2218,8 +2221,11 @@ _TEST_MAIL_LAST = {}
 def notify_prefs(data):
     raw = data.get("notifications") if isinstance(data, dict) else None
     prefs = dict(NOTIFY_DEFAULTS)
-    if isinstance(raw, dict):
-        for key in ("sales", "stock"):
+    # Opt-in: only preferences the merchant actually set (the app marks them "configured")
+    # count. Anything else — including values a client wrote before notifications were
+    # opt-in — is ignored, so nobody is emailed without having asked for it.
+    if isinstance(raw, dict) and raw.get("configured") is True:
+        for key in ("sales", "stock", "monthly"):
             if isinstance(raw.get(key), bool):
                 prefs[key] = raw[key]
         if raw.get("frequency") in ("instant", "daily"):
@@ -2356,16 +2362,199 @@ def _sample_events(kind="digest"):
     return {"sale": [sale], "stock": [low, out], "digest": [sale, sale2, low, out]}.get(kind, [sale, low])
 
 
+
+MONTHS_FR = ["janvier", "février", "mars", "avril", "mai", "juin", "juillet", "août", "septembre", "octobre", "novembre", "décembre"]
+VAT_RATE = 0.20
+
+
+def _parse_dt(value):
+    try:
+        d = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        return d if d.tzinfo else d.replace(tzinfo=timezone.utc)
+    except (ValueError, TypeError):
+        return None
+
+
+def _month_bounds(year, month):
+    start = datetime(year, month, 1, tzinfo=timezone.utc)
+    end = datetime(year + (month == 12), month % 12 + 1, 1, tzinfo=timezone.utc)
+    return start, end
+
+
+def _expense_total(expenses, start, end):
+    total = 0.0
+    for e in expenses or []:
+        if not isinstance(e, dict):
+            continue
+        d = _parse_dt(e.get("date"))
+        try:
+            amount = float(e.get("amount", 0) or 0)
+        except (TypeError, ValueError):
+            continue
+        if d is None:
+            continue
+        rec = e.get("recurrence") or "none"
+        guard = 0
+        while d < end and guard < 600:
+            if d >= start:
+                total += amount
+            if rec == "none":
+                break
+            if rec == "weekly":
+                d += timedelta(days=7)
+            elif rec == "monthly":
+                d = d.replace(year=d.year + (d.month == 12), month=d.month % 12 + 1, day=min(d.day, 28))
+            elif rec == "yearly":
+                d = d.replace(year=d.year + 1, day=min(d.day, 28))
+            else:
+                break
+            guard += 1
+    return total
+
+
+def compute_month_summary(data, year, month):
+    """Same rules as the app's Vue d'ensemble / Comptabilité (returns excluded from revenue,
+    VAT estimated at 20 %, purchase cost x quantity, expenses incl. recurring ones)."""
+    start, end = _month_bounds(year, month)
+    pstart, pend = _month_bounds(year - (month == 1), 12 if month == 1 else month - 1)
+    products = {p.get("id"): p for p in (data.get("products") or []) if isinstance(p, dict)}
+    cur, prev_ca, returns = [], 0.0, 0
+    for o in data.get("orders") or []:
+        d = _parse_dt(o.get("date")) if isinstance(o, dict) else None
+        if d is None:
+            continue
+        if start <= d < end:
+            if o.get("status") == "retour":
+                returns += 1
+            else:
+                cur.append(o)
+        elif pstart <= d < pend and o.get("status") != "retour":
+            prev_ca += float(o.get("amount", 0) or 0)
+    ca = sum(float(o.get("amount", 0) or 0) for o in cur)
+    cost = 0.0
+    by_product, by_country, unset_cost = {}, {}, set()
+    for o in cur:
+        p = products.get(o.get("productId"))
+        qty = int(o.get("quantity") or 1)
+        if p:
+            cost += float(p.get("costPrice") or 0) * qty
+            by_product[p.get("name", "Produit")] = by_product.get(p.get("name", "Produit"), 0) + qty
+            if not p.get("costPrice"):
+                unset_cost.add(p.get("name", "Produit"))
+        if o.get("country"):
+            by_country[str(o["country"]).upper()] = by_country.get(str(o["country"]).upper(), 0) + 1
+    ht = ca / (1 + VAT_RATE)
+    expenses = _expense_total(data.get("expenses"), start, end)
+    total_orders = len(cur) + returns
+    return {
+        "label": f"{MONTHS_FR[month - 1]} {year}", "orders": len(cur), "returns": returns,
+        "returnRate": (returns / total_orders * 100) if total_orders else 0.0,
+        "ca": ca, "avgBasket": ca / len(cur) if cur else 0.0,
+        "caDelta": ((ca - prev_ca) / prev_ca * 100) if prev_ca else None,
+        "tva": ca - ht, "cost": cost, "expenses": expenses, "net": ht - cost - expenses,
+        "topProducts": sorted(by_product.items(), key=lambda kv: -kv[1])[:3],
+        "topCountries": sorted(by_country.items(), key=lambda kv: -kv[1])[:3],
+        "missingCost": sorted(unset_cost), "noExpenses": not (data.get("expenses") or []),
+    }
+
+
+def build_monthly_email(sm):
+    def stat(label, value, sub=""):
+        return (f'<td width="50%" style="padding:6px;"><div style="background:#F3F4F1; border-radius:10px; padding:12px 14px;">'
+                f'<div style="font-size:11.5px; color:#8A9186;">{label}</div>'
+                f'<div style="font-size:19px; font-weight:800; color:#1B211D; margin-top:2px;">{value}</div>'
+                + (f'<div style="font-size:11.5px; color:#8A9186; margin-top:2px;">{sub}</div>' if sub else "") + "</div></td>")
+    delta = "" if sm["caDelta"] is None else f'{"+" if sm["caDelta"] >= 0 else ""}{sm["caDelta"]:.0f} % vs mois précédent'
+    grid = ('<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:6px -6px 14px;"><tr>'
+            + stat("Chiffre d'affaires", _eur(sm["ca"]), delta) + stat("Commandes", str(sm["orders"]), f'{sm["returns"]} retour{"s" if sm["returns"] > 1 else ""} ({sm["returnRate"]:.0f} %)') + "</tr><tr>"
+            + stat("Panier moyen", _eur(sm["avgBasket"])) + stat("Bénéfice net estimé", _eur(sm["net"]), "après TVA, coûts et charges") + "</tr></table>")
+    lines = [
+        ("TVA à reverser (estimée à 20 %)", "− " + _eur(sm["tva"])),
+        ("Coût d'achat des produits vendus", "− " + _eur(sm["cost"])),
+        ("Charges du mois", "− " + _eur(sm["expenses"])),
+    ]
+    detail = "".join(f'<tr><td style="padding:7px 0; border-bottom:1px solid #E1E3DC; font-size:13.5px; color:#566058;">{a}</td><td align="right" style="padding:7px 0; border-bottom:1px solid #E1E3DC; font-size:13.5px; font-weight:700; color:#1B211D; white-space:nowrap;">{b}</td></tr>' for a, b in lines)
+    detail = f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:16px;">{detail}</table>'
+    extras = ""
+    if sm["topProducts"]:
+        extras += ('<div style="font-size:11.5px; letter-spacing:.08em; text-transform:uppercase; color:#8A9186; font-weight:700; margin:4px 0 6px;">Produits les plus vendus</div>'
+                   + "".join(f'<div style="font-size:13.5px; color:#1B211D; padding:3px 0;">{html.escape(str(n))} <span style="color:#8A9186;">· {q} vendu{"s" if q > 1 else ""}</span></div>' for n, q in sm["topProducts"]))
+    if sm["topCountries"]:
+        extras += ('<div style="font-size:11.5px; letter-spacing:.08em; text-transform:uppercase; color:#8A9186; font-weight:700; margin:14px 0 6px;">Pays</div>'
+                   + "".join(f'<div style="font-size:13.5px; color:#1B211D; padding:3px 0;">{_flag(c)} {html.escape(c)} <span style="color:#8A9186;">· {n} vente{"s" if n > 1 else ""}</span></div>' for c, n in sm["topCountries"]))
+    gaps = []
+    if sm["missingCost"]:
+        names = ", ".join(html.escape(n) for n in sm["missingCost"][:3]) + (" …" if len(sm["missingCost"]) > 3 else "")
+        gaps.append(f"{len(sm['missingCost'])} produit{'s' if len(sm['missingCost']) > 1 else ''} vendu{'s' if len(sm['missingCost']) > 1 else ''} sans prix d'achat ({names})")
+    if sm["noExpenses"]:
+        gaps.append("aucune charge enregistrée")
+    warn = ('<div style="margin-top:18px; background:#FDF0D5; border-radius:10px; padding:12px 14px; font-size:12.5px; line-height:1.6; color:#6B4A00;">'
+            "<b>Ces chiffres dépendent des données saisies dans Comptoir</b> : commandes reçues de vos plateformes, prix d'achat de vos produits et charges renseignées. "
+            + ("Ici, il manque : " + " ; ".join(gaps) + ", donc le bénéfice est probablement surestimé. " if gaps else "")
+            + f'Complétez-les dans <a href="{PUBLIC_BASE_URL}/#catalogue" style="color:#6B4A00;">Mon catalogue</a> et <a href="{PUBLIC_BASE_URL}/#comptabilite" style="color:#6B4A00;">Comptabilité</a>. '
+            "Estimation simplifiée, elle ne remplace pas votre comptable.</div>")
+    footnote = (f'Vous recevez ce bilan car le résumé mensuel est activé sur votre compte. <a href="{PUBLIC_BASE_URL}/#parametres" style="color:#146356;">Le désactiver</a> dans Paramètres.')
+    heading = f"Votre bilan de {sm['label']}"
+    body = grid + detail + extras + warn
+    html_body = branded_email_html(heading, body, footnote, "Voir le détail dans Comptoir", f"{PUBLIC_BASE_URL}/#comptabilite")
+    text = (f"{heading}\n\nChiffre d'affaires : {_eur(sm['ca'])}\nCommandes : {sm['orders']} (retours : {sm['returns']})\nPanier moyen : {_eur(sm['avgBasket'])}\n"
+            f"TVA estimée : {_eur(sm['tva'])}\nCoût d'achat : {_eur(sm['cost'])}\nCharges : {_eur(sm['expenses'])}\nBénéfice net estimé : {_eur(sm['net'])}\n\n"
+            "Ces chiffres dépendent des données saisies dans Comptoir (commandes, prix d'achat, charges).\n" + (("Il manque : " + " ; ".join(gaps) + ".\n") if gaps else "")
+            + f"\nDétail : {PUBLIC_BASE_URL}/#comptabilite\nDésactiver : {PUBLIC_BASE_URL}/#parametres")
+    return f"Comptoir — Votre bilan de {sm['label']}", text, html_body
+
+
+def _sample_month_summary():
+    return {"label": "septembre 2026", "orders": 62, "returns": 6, "returnRate": 8.8, "ca": 2245.33, "avgBasket": 36.22, "caDelta": 12.4,
+            "tva": 374.22, "cost": 512.0, "expenses": 71.0, "net": 914.11,
+            "topProducts": [("Bougie parfumée Cèdre", 41), ("Savon artisanal", 28), ("Vase en grès", 9)], "topCountries": [("FR", 48), ("BE", 9), ("CH", 5)],
+            "missingCost": ["Plaid en laine"], "noExpenses": False}
+
+
+def process_monthly_summaries():
+    """From the 1st to the 5th of each month (08:00 Paris and after), send last month's summary
+    to every account that opted in — once. Outside that window this returns immediately."""
+    paris = _paris_now()
+    if paris.day > 5 or paris.hour < NOTIFY_DIGEST_HOUR:
+        return
+    py, pm = paris.year - (paris.month == 1), 12 if paris.month == 1 else paris.month - 1
+    key = f"{py}-{pm:02d}"
+    conn = get_db()
+    try:
+        rows = conn.execute("SELECT u.id, u.email, s.data FROM users u JOIN app_state s ON s.user_id = u.id WHERE u.email_verified_at IS NOT NULL AND u.plan_status IN ('active','trialing','past_due')").fetchall()
+        for r in rows:
+            try:
+                data = json.loads(r["data"])
+            except json.JSONDecodeError:
+                continue
+            if not notify_prefs(data)["monthly"]:
+                continue
+            st = conn.execute("SELECT last_monthly FROM notification_state WHERE user_id = ?", (r["id"],)).fetchone()
+            if st and st["last_monthly"] == key:
+                continue
+            summary = compute_month_summary(data, py, pm)
+            if summary["orders"] + summary["returns"] > 0:
+                subject, text, html_body = build_monthly_email(summary)
+                send_email(r["email"], subject, text, html_body)
+            conn.execute("INSERT INTO notification_state (user_id, last_monthly) VALUES (?, ?) ON CONFLICT(user_id) DO UPDATE SET last_monthly = excluded.last_monthly", (r["id"], key))
+            conn.commit()
+    finally:
+        conn.close()
+
+
 def handle_notification_preview(token, params):
     user = user_from_token(token)
     if not user:
         raise ApiError(401, "Session invalide ou expirée.")
     kind = params.get("type", "digest")
-    subject, _text, html_body = build_notification_email(_sample_events(kind))
+    if kind == "monthly":
+        subject, _text, html_body = build_monthly_email(_sample_month_summary())
+    else:
+        subject, _text, html_body = build_notification_email(_sample_events(kind))
     return {"subject": subject, "html": html_body}
 
 
-def handle_notification_test(token):
+def handle_notification_test(token, body=None):
     user = user_from_token(token)
     if not user:
         raise ApiError(401, "Session invalide ou expirée.")
@@ -2373,7 +2562,11 @@ def handle_notification_test(token):
     if now - _TEST_MAIL_LAST.get(user["id"], 0) < 30:
         raise ApiError(429, "Un email de test vient d'être envoyé : patientez quelques secondes.")
     _TEST_MAIL_LAST[user["id"]] = now
-    subject, text, html_body = build_notification_email(_sample_events("digest"))
+    kind = (body or {}).get("type", "digest") if isinstance(body, dict) else "digest"
+    if kind == "monthly":
+        subject, text, html_body = build_monthly_email(_sample_month_summary())
+    else:
+        subject, text, html_body = build_notification_email(_sample_events(kind))
     send_email(user["email"], "[Test] " + subject, text, html_body)
     return {"ok": True, "sent": bool(BREVO_API_KEY), "to": user["email"]}
 
@@ -2443,6 +2636,7 @@ def _notify_loop():
     while True:
         try:
             process_notifications()
+            process_monthly_summaries()
         except Exception:
             traceback.print_exc(file=sys.stderr)
         time.sleep(30)
@@ -2607,7 +2801,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             if path == "/api/connectors/channel":
                 return self._send_json(200, handle_connect_channel(self._bearer_token(), body))
             if path == "/api/notifications/test":
-                return self._send_json(200, handle_notification_test(self._bearer_token()))
+                return self._send_json(200, handle_notification_test(self._bearer_token(), body))
             if path == "/api/tracking/site":
                 return self._send_json(200, handle_tracking_site(self._bearer_token(), body))
             if path == "/api/ingest/orders":

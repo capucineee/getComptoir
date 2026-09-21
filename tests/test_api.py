@@ -299,9 +299,12 @@ class TestNotifications(ServerCase):
         cls.sent = []
         cls.srv.send_email = lambda to, subject, text, html_body=None: cls.sent.append((to, subject, text))
 
+    ON = {"sales": True, "stock": True, "monthly": False, "frequency": "instant", "configured": True}
+
     def setUp(self):
         self.acc = self.new_account()
         self.sent.clear()
+        self.put_state(notifications=dict(self.ON))
 
     def state(self):
         return json.loads(self.api.call("/api/state", token=self.acc["token"])[1]["data"])
@@ -345,7 +348,7 @@ class TestNotifications(ServerCase):
         self.assertIn("et 15 autres ventes", mine[0][2])
 
     def test_disabled_sales_are_not_queued(self):
-        self.put_state(notifications={"sales": False, "stock": True, "frequency": "instant"})
+        self.put_state(notifications=dict(self.ON, sales=False))
         self.ing({"externalId": "OFF1", "amount": 10})
         self.assertEqual(self.sql("select count(*) from notification_queue where kind='sale'")[0][0], 0)
 
@@ -358,13 +361,13 @@ class TestNotifications(ServerCase):
 
     def test_disabling_after_queueing_drops_the_email(self):
         self.ing({"externalId": "D1", "amount": 10})
-        self.put_state(notifications={"sales": False, "stock": False, "frequency": "instant"})
+        self.put_state(notifications=dict(self.ON, sales=False, stock=False))
         self.flush()
         self.assertEqual([m for m in self.sent if m[0] == self.acc["email"]], [])
 
     def test_daily_mode_waits_for_morning(self):
         from datetime import datetime, timezone
-        self.put_state(notifications={"sales": True, "stock": True, "frequency": "daily"})
+        self.put_state(notifications=dict(self.ON, frequency="daily"))
         self.ing({"externalId": "DL1", "amount": 10})
         self.sql("update notification_queue set created_at = datetime('now','-1 hour')")
         self.sql("delete from notification_state")
@@ -379,14 +382,70 @@ class TestNotifications(ServerCase):
         finally:
             self.srv._paris_now = real
 
+    def test_off_by_default_and_legacy_values_are_ignored(self):
+        self.put_state(notifications={"sales": True, "stock": True, "frequency": "instant"})  # no "configured": ignored
+        self.ing({"externalId": "LEG1", "amount": 10})
+        self.assertEqual(self.sql("select count(*) from notification_queue")[0][0], 0)
+        st = self.state()
+        st.pop("notifications", None)
+        self.api.call("/api/state", "PUT", {"data": json.dumps(st)}, self.acc["token"])
+        self.ing({"externalId": "LEG2", "amount": 10})
+        self.assertEqual(self.sql("select count(*) from notification_queue")[0][0], 0)
+
+    def test_monthly_summary_numbers_and_disclaimer(self):
+        data = {
+            "products": [{"id": "p1", "name": "Bougie", "costPrice": 5}, {"id": "p2", "name": "Savon", "costPrice": 0}],
+            "orders": [
+                {"date": "2026-08-05T10:00:00Z", "amount": 60, "status": "livree", "productId": "p1", "quantity": 2, "country": "FR"},
+                {"date": "2026-08-20T10:00:00Z", "amount": 60, "status": "livree", "productId": "p2", "quantity": 1, "country": "BE"},
+                {"date": "2026-08-21T10:00:00Z", "amount": 99, "status": "retour", "productId": "p1", "quantity": 1},
+                {"date": "2026-07-10T10:00:00Z", "amount": 60, "status": "livree", "productId": "p1", "quantity": 1},
+            ],
+            "expenses": [{"date": "2026-01-15T00:00:00Z", "amount": 10, "recurrence": "monthly"}],
+        }
+        sm = self.srv.compute_month_summary(data, 2026, 8)
+        self.assertEqual((sm["orders"], sm["returns"]), (2, 1))
+        self.assertAlmostEqual(sm["ca"], 120.0)
+        self.assertAlmostEqual(sm["cost"], 10.0)              # 2 x 5, the other product has no cost
+        self.assertAlmostEqual(sm["expenses"], 10.0)          # one monthly occurrence in August
+        self.assertAlmostEqual(sm["net"], 120 / 1.2 - 10 - 10)
+        self.assertAlmostEqual(sm["caDelta"], 100.0)          # 60 -> 120
+        self.assertEqual(sm["missingCost"], ["Savon"])
+        subject, text, html_body = self.srv.build_monthly_email(sm)
+        self.assertIn("août 2026", subject)
+        self.assertIn("dépendent des données saisies", html_body)
+        self.assertIn("Savon", html_body)
+
+    def test_monthly_worker_sends_once_in_the_first_days_only(self):
+        from datetime import datetime, timezone
+        self.put_state(notifications=dict(self.ON, sales=False, stock=False, monthly=True))
+        now = datetime.now(timezone.utc)
+        py, pm = (now.year - (now.month == 1), 12 if now.month == 1 else now.month - 1)
+        self.put_state(orders=[{"id": "m1", "orderNumber": 1, "externalId": "M1", "customer": "C", "amount": 50, "status": "livree", "channelType": "custom", "date": f"{py}-{pm:02d}-10T10:00:00Z", "custom": {}, "quantity": 1}])
+        real = self.srv._paris_now
+        try:
+            self.srv._paris_now = lambda: datetime(now.year, now.month, 15, 9, 0, tzinfo=timezone.utc)   # mid-month: nothing
+            self.srv.process_monthly_summaries()
+            self.assertEqual([m for m in self.sent if m[0] == self.acc["email"]], [])
+            self.srv._paris_now = lambda: datetime(now.year, now.month, 2, 9, 0, tzinfo=timezone.utc)    # 2nd, after 08:00: sent
+            self.srv.process_monthly_summaries()
+            self.srv.process_monthly_summaries()                                                          # and only once
+            mine = [m for m in self.sent if m[0] == self.acc["email"]]
+            self.assertEqual(len(mine), 1)
+            self.assertIn("Votre bilan de", mine[0][1])
+        finally:
+            self.srv._paris_now = real
+
     def test_preview_and_test_endpoints(self):
         self.assertEqual(self.api.call("/api/notifications/preview?type=sale")[0], 401)
         s, j = self.api.call("/api/notifications/preview?type=digest", token=self.acc["token"])
         self.assertEqual(s, 200)
         self.assertIn("<html", j["html"])
         self.assertIn("Rupture", j["html"])
-        self.assertEqual(self.api.call("/api/notifications/test", "POST", token=self.acc["token"])[0], 200)
-        self.assertEqual(self.api.call("/api/notifications/test", "POST", token=self.acc["token"])[0], 429)
+        s, j = self.api.call("/api/notifications/preview?type=monthly", token=self.acc["token"])
+        self.assertIn("dépendent des données saisies", j["html"])
+        self.assertEqual(self.api.call("/api/notifications/test", "POST", {"type": "sale"}, self.acc["token"])[0], 200)
+        self.assertEqual(self.api.call("/api/notifications/test", "POST", {"type": "sale"}, self.acc["token"])[0], 429)
 
     def test_html_in_data_is_escaped_in_the_email(self):
         self.ing({"externalId": "XS1", "amount": 10, "customerName": "<script>alert(1)</script>"})
