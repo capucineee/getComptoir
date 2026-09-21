@@ -465,3 +465,16 @@ table.data tbody tr.row-incomplete:hover { filter: brightness(0.97); }
   table.data.table-cards td[data-label=""] { justify-content: flex-end; }
   table.data.table-cards tr.row-click { cursor: pointer; }
 }
+
+/* Pre-launch countdown */
+.cd { margin: 26px 0 8px; max-width: 520px; }
+.cd-label { font-size: 12px; letter-spacing: .12em; text-transform: uppercase; color: var(--ink-faint); font-weight: 600; margin-bottom: 10px; }
+.cd-tiles { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+.cd-tile { background: var(--surface); border: 1px solid var(--rule); border-radius: 12px; padding: 14px 6px 10px; text-align: center; box-shadow: 0 1px 2px rgba(20,30,22,0.05); }
+.cd-tile b { display: block; font-family: var(--font-mono); font-size: 34px; font-weight: 600; font-variant-numeric: tabular-nums; color: var(--brand); letter-spacing: -.02em; line-height: 1.1; }
+.cd-tile span { display: block; font-size: 11.5px; color: var(--ink-faint); margin-top: 4px; }
+.cd-when { margin: 10px 0 18px; font-size: 13px; color: var(--ink-soft); }
+.cd-when::first-letter { text-transform: uppercase; }
+.l-final .cd { margin: 22px auto 8px; }
+.auth-card .cd { margin: 18px 0 6px; }
+@media (max-width: 480px) { .cd-tile b { font-size: 26px; } }

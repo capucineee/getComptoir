@@ -484,6 +484,7 @@ function renderTransition(done) {
 function renderLanding() {
   document.getElementById('appRoot').style.display = 'none';
   const dark = resolvedTheme() === 'dark';
+  const closed = !launchOpen();
   document.getElementById('authRoot').innerHTML = `
     <div id="landingRoot">
       <style>
@@ -666,7 +667,7 @@ function renderLanding() {
                 : `<svg viewBox="0 0 16 16" fill="currentColor"><path d="M13.5 9.8A5.8 5.8 0 0 1 6.2 2.5a5.8 5.8 0 1 0 7.3 7.3z"/></svg>`}
               <span class="l-toggle-label">${dark ? 'Sombre' : 'Clair'}</span>
             </button>
-            <button class="l-nav-cta" data-action="authSwitch" data-mode="signup" type="button"><span class="l-cta-full">Créer un compte / Se connecter</span><span class="l-cta-short">Connexion</span></button>
+            <button class="l-nav-cta" data-action="authSwitch" data-mode="${closed ? 'login' : 'signup'}" type="button"><span class="l-cta-full">${closed ? 'Se connecter' : 'Créer un compte / Se connecter'}</span><span class="l-cta-short">Connexion</span></button>
           </div>
         </div>
       </header>
@@ -678,9 +679,10 @@ function renderLanding() {
             <h1 class="l-hero-h">Vendez partout.<br><span class="accent">Comptez ici.</span></h1>
             <p class="l-hero-sub">Comptoir centralise vos ventes Shopify, Etsy, Instagram et toute plateforme connectée via API dans un seul tableau de bord — pour comprendre vos vraies performances, pas juste vos ventes brutes.</p>
             <p class="l-hero-sub2">Stock synchronisé automatiquement. Marge et bénéfice net calculés en temps réel. Zéro tableur.</p>
+            ${closed ? countdownHTML() : ''}
             <div class="l-hero-ctas">
-              <button class="l-btn-cta primary" data-action="authSwitch" data-mode="signup" type="button">Créer un compte</button>
-              <a class="l-btn-cta ghost" href="#l-tarifs">Voir les tarifs</a>
+              ${closed ? `<a class="l-btn-cta primary" href="#l-tarifs">Voir les tarifs</a><button class="l-btn-cta ghost" data-action="authSwitch" data-mode="login" type="button">Se connecter</button>` : `<button class="l-btn-cta primary" data-action="authSwitch" data-mode="signup" type="button">Créer un compte</button>
+              <a class="l-btn-cta ghost" href="#l-tarifs">Voir les tarifs</a>`}
             </div>
             <div class="l-hero-note">Installation en quelques minutes. Sans engagement de durée.</div>
           </div>
@@ -864,7 +866,7 @@ function renderLanding() {
                 <div class="l-plan-name">${p.name}</div>
                 <div class="l-plan-price">${fmtEUR(p.price)}<span>/mois</span></div>
                 <ul class="l-plan-list"><li>${p.channels === Infinity ? 'Canaux illimités' : p.channels + ' canal' + (p.channels > 1 ? 'aux' : '')}</li><li>${fmtNum(p.orders)} commandes / mois</li></ul>
-                <button class="l-plan-cta" data-action="authSwitch" data-mode="signup" type="button">Choisir ${p.name}</button>
+                ${closed ? `<button class="l-plan-cta" type="button" disabled style="opacity:.55; cursor:default;">Bientôt disponible</button>` : `<button class="l-plan-cta" data-action="authSwitch" data-mode="signup" type="button">Choisir ${p.name}</button>`}
               </div>
             `).join('')}
           </div>
@@ -905,11 +907,12 @@ function renderLanding() {
 
       <section class="l-final">
         <div class="wrap l-final-inner">
-          <h2>Prêt à centraliser vos ventes ?</h2>
-          <p>Créez votre compte et connectez votre première plateforme en quelques minutes.</p>
+          <h2>${closed ? 'Ouverture dans quelques jours' : 'Prêt à centraliser vos ventes ?'}</h2>
+          <p>${closed ? 'Comptoir ouvre bientôt ses portes. Revenez à l\'ouverture pour créer votre compte et connecter votre première plateforme.' : 'Créez votre compte et connectez votre première plateforme en quelques minutes.'}</p>
+          ${closed ? countdownHTML() : ''}
           <div class="l-hero-ctas">
-            <button class="l-btn-cta primary" data-action="authSwitch" data-mode="signup" type="button">Créer un compte</button>
-            <a class="l-btn-cta ghost" href="#l-tarifs">Comparer les forfaits</a>
+            ${closed ? `<a class="l-btn-cta primary" href="#l-tarifs">Comparer les forfaits</a>` : `<button class="l-btn-cta primary" data-action="authSwitch" data-mode="signup" type="button">Créer un compte</button>
+            <a class="l-btn-cta ghost" href="#l-tarifs">Comparer les forfaits</a>`}
           </div>
         </div>
       </section>
@@ -931,8 +934,53 @@ function renderLanding() {
   `;
 }
 
+/* ---------- pre-launch gate: sign-ups closed until the launch date, with a countdown ---------- */
+const LAUNCH_FALLBACK = '2026-09-28T09:00:00+02:00';
+let launch = { at: new Date(LAUNCH_FALLBACK).getTime(), offset: 0, open: false, loaded: false };
+async function loadLaunch() {
+  try {
+    const r = await apiRequest('/api/launch');
+    launch = { at: new Date(r.launchAt).getTime(), offset: new Date(r.serverNow).getTime() - Date.now(), open: !!r.open, loaded: true };
+  } catch (e) { launch.open = Date.now() >= launch.at; }
+}
+const launchOpen = () => launch.open || (Date.now() + launch.offset) >= launch.at;
+function countdownHTML() {
+  const when = new Date(launch.at).toLocaleString('fr-FR', { timeZone: 'Europe/Paris', weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' }).replace(/(\d{2}):(\d{2})$/, '$1 h $2');
+  return `<div class="cd" data-cd role="timer" aria-live="off">
+    <div class="cd-label">Ouverture des inscriptions dans</div>
+    <div class="cd-tiles">${[['d', 'jours'], ['h', 'heures'], ['m', 'minutes'], ['s', 'secondes']].map(([u, l]) => `<div class="cd-tile"><b data-cd-unit="${u}">--</b><span>${l}</span></div>`).join('')}</div>
+    <div class="cd-when">${when}</div>
+  </div>`;
+}
+let cdTimer = null;
+function tickCountdown() {
+  const els = document.querySelectorAll('[data-cd]');
+  if (!els.length) { clearInterval(cdTimer); cdTimer = null; return; }
+  const ms = launch.at - (Date.now() + launch.offset);
+  if (ms <= 0) { clearInterval(cdTimer); cdTimer = null; location.reload(); return; }
+  const v = { d: Math.floor(ms / 864e5), h: Math.floor(ms % 864e5 / 36e5), m: Math.floor(ms % 36e5 / 6e4), s: Math.floor(ms % 6e4 / 1e3) };
+  els.forEach(el => el.querySelectorAll('[data-cd-unit]').forEach(b => { b.textContent = String(v[b.dataset.cdUnit]).padStart(2, '0'); }));
+}
+function startCountdown() { tickCountdown(); if (!cdTimer) cdTimer = setInterval(tickCountdown, 1000); }
+function renderAuthClosed() {
+  document.getElementById('appRoot').style.display = 'none';
+  document.getElementById('authRoot').innerHTML = `
+    <div class="auth-wrap">
+      <div class="auth-card">
+        <div class="auth-brand">${AUTH_MARK}<span>Comptoir</span></div>
+        <h1>Bientôt ouvert</h1>
+        <div class="auth-sub">Les inscriptions ouvrent dans quelques jours. Revenez à l'ouverture !</div>
+        ${countdownHTML()}
+        <div class="auth-switch">Déjà un compte ? <button type="button" data-action="authSwitch" data-mode="login">Se connecter</button></div>
+        <div class="auth-switch"><a href="/" style="color:var(--ink-faint);">← Retour à l'accueil</a></div>
+      </div>
+    </div>`;
+  startCountdown();
+}
+
 function renderAuth(mode) {
   const isSignup = mode === 'signup';
+  if (isSignup && !launchOpen()) return renderAuthClosed();
   document.getElementById('appRoot').style.display = 'none';
   document.getElementById('authRoot').innerHTML = `
     <div class="auth-wrap">
@@ -1082,7 +1130,7 @@ function renderPasswordResetConfirm(token) {
 
 async function boot() {
   const session = getSession();
-  if (!session || !session.token) return renderLanding();
+  if (!session || !session.token) { await loadLaunch(); renderLanding(); if (!launchOpen()) startCountdown(); return; }
   let me;
   try {
     me = await apiRequest('/api/me', { token: session.token });
@@ -3433,6 +3481,7 @@ document.addEventListener('click', e => {
   }
   if (action === 'closeModal') return closeModal();
 
+  if (action === 'authSwitch' && el.dataset.mode === 'signup' && !launch.loaded) { loadLaunch().then(() => renderAuth('signup')); return; }
   if (action === 'authSwitch') {
     if (el.dataset.mode === 'reset-request') return renderPasswordResetRequest();
     return renderAuth(el.dataset.mode);

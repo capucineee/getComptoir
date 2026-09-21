@@ -45,12 +45,14 @@ class Api:
 
 
 class ServerCase(unittest.TestCase):
+    EXTRA_ENV = {"LAUNCH_AT": "2000-01-01T00:00:00+00:00"}  # sign-ups open unless a test says otherwise
+
     @classmethod
     def setUpClass(cls):
         cls.tmp = tempfile.mkdtemp()
         cls.db = os.path.join(cls.tmp, "test.db")
         port = free_port()
-        env = dict(os.environ, COMPTOIR_DB_PATH=cls.db, PORT=str(port))
+        env = dict(os.environ, COMPTOIR_DB_PATH=cls.db, PORT=str(port), **cls.EXTRA_ENV)
         for k in ("R2_ACCOUNT_ID", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "R2_BUCKET_NAME", "STRIPE_SECRET_KEY", "BREVO_API_KEY"):
             env.pop(k, None)
         cls.proc = subprocess.Popen([sys.executable, os.path.join(ROOT, "server.py")], cwd=ROOT, env=env,
@@ -280,6 +282,29 @@ class TestTracking(ServerCase):
         self.assertEqual({x["source"] for x in stats["sources"]}, {"Google", "Instagram"})
         other = self.new_account()
         self.assertEqual(self.api.call("/api/tracking/stats", token=other["token"])[1]["visitors"], 0)
+
+
+class TestPreLaunch(ServerCase):
+    EXTRA_ENV = {"LAUNCH_AT": "2999-01-01T09:00:00+02:00", "SIGNUP_ALLOWLIST": "early@example.com"}
+
+    def test_launch_info(self):
+        s, j = self.api.call("/api/launch")
+        self.assertEqual(s, 200)
+        self.assertFalse(j["open"])
+        self.assertTrue(j["launchAt"].startswith("2999-01-01T07:00:00"))
+
+    def test_signup_blocked_but_allowlist_and_login_work(self):
+        s, j = self.api.call("/api/signup", "POST", {"email": "new@example.com", "password": "Passw0rd!x", "acceptTerms": True})
+        self.assertEqual(s, 403, j)
+        self.assertEqual(self.sql("select count(*) from users where email='new@example.com'")[0][0], 0)
+        s, j = self.api.call("/api/signup", "POST", {"email": "Early@example.com", "password": "Passw0rd!x", "acceptTerms": True})
+        self.assertEqual(s, 200, j)
+        self.assertEqual(self.api.call("/api/login", "POST", {"email": "early@example.com", "password": "Passw0rd!x"})[0], 200)
+
+
+class TestPostLaunch(ServerCase):
+    def test_open(self):
+        self.assertTrue(self.api.call("/api/launch")[1]["open"])
 
 
 if __name__ == "__main__":

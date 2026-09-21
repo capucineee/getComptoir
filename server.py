@@ -43,6 +43,28 @@ DB_PATH = os.environ.get("COMPTOIR_DB_PATH") or os.path.join(ROOT, "comptoir.db"
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 PBKDF2_ITERATIONS = 100_000
 SESSION_TTL_DAYS = 30
+
+# Pre-launch gate: new sign-ups are refused until LAUNCH_AT (existing accounts keep logging
+# in). Set LAUNCH_AT (ISO 8601) on the host to move the date; SIGNUP_ALLOWLIST (comma-
+# separated emails) lets specific people create an account early, e.g. for a demo or test.
+LAUNCH_AT_RAW = os.environ.get("LAUNCH_AT") or "2026-09-28T09:00:00+02:00"
+SIGNUP_ALLOWLIST = {e.strip().lower() for e in (os.environ.get("SIGNUP_ALLOWLIST") or "").split(",") if e.strip()}
+
+
+def _launch_at():
+    try:
+        d = datetime.fromisoformat(LAUNCH_AT_RAW.replace("Z", "+00:00"))
+    except ValueError:
+        return datetime(2000, 1, 1, tzinfo=timezone.utc)  # a broken value must never lock everyone out
+    return d if d.tzinfo else d.replace(tzinfo=timezone.utc)
+
+
+def launch_is_open():
+    return datetime.now(timezone.utc) >= _launch_at()
+
+
+def handle_launch():
+    return {"launchAt": _launch_at().astimezone(timezone.utc).isoformat(), "serverNow": datetime.now(timezone.utc).isoformat(), "open": launch_is_open()}
 PASSWORD_RESET_TTL_MINUTES = 60
 # Where reset links point. Kept as an explicit env var rather than trusting the request's
 # Host header (which can be spoofed or, behind a proxy, wrong) — same reasoning as
@@ -504,6 +526,8 @@ def handle_signup(body):
     password = body["password"]
     if not EMAIL_RE.match(email):
         raise ApiError(400, "Adresse email invalide.")
+    if not launch_is_open() and email not in SIGNUP_ALLOWLIST:
+        raise ApiError(403, "Les inscriptions ne sont pas encore ouvertes : rendez-vous à l'ouverture de Comptoir.")
     if len(password) < 8:
         raise ApiError(400, "Le mot de passe doit contenir au moins 8 caractères.")
     if not body.get("acceptTerms"):
@@ -2350,6 +2374,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 return self._send_json(200, handle_me(self._bearer_token()))
             except ApiError as e:
                 return self._send_json(e.status, {"error": e.message})
+        if path == "/api/launch":
+            return self._send_json(200, handle_launch())
         if path == "/api/health":
             status, payload = handle_health()
             return self._send_json(status, payload)
