@@ -379,6 +379,17 @@ def init_db():
             shop_domain TEXT NOT NULL,
             created_at TEXT NOT NULL DEFAULT (datetime('now'))
         );
+        CREATE TABLE IF NOT EXISTS notification_queue (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            kind TEXT NOT NULL,
+            payload TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE TABLE IF NOT EXISTS notification_state (
+            user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+            last_sent_at TEXT
+        );
         CREATE TABLE IF NOT EXISTS tracking_sites (
             site_key TEXT PRIMARY KEY,
             user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -1407,6 +1418,7 @@ def _ingest_order_core(conn, user_id: str, channel_type: str, connector_id: str,
         orders = data.setdefault("orders", [])
 
         products = data.setdefault("products", [])
+        notify_events = []
 
         def find_or_create_product(name):
             match = next((p for p in products if p.get("name", "").strip().lower() == name.lower()), None)
@@ -1457,8 +1469,10 @@ def _ingest_order_core(conn, user_id: str, channel_type: str, connector_id: str,
                     delta = qty if order_status == "retour" else -qty
                     if reverse:
                         delta = -delta
-                    product["stock"] = max(0, (product.get("stock", 0) or 0) + delta)
+                    before_stock = product.get("stock", 0) or 0
+                    product["stock"] = max(0, before_stock + delta)
                     product["updatedAt"] = now_iso
+                    _stock_event(notify_events, product, before_stock, product["stock"])
 
                 had_product_id = bool(existing.get("productId"))
                 if not had_product_id and product_name:
@@ -1504,6 +1518,7 @@ def _ingest_order_core(conn, user_id: str, channel_type: str, connector_id: str,
 
                 if changed:
                     existing["updatedAt"] = now_iso
+                    _queue_events(conn, user_id, data, notify_events)
                     new_data = json.dumps(data)
                     conn.execute(
                         "UPDATE app_state SET data = ?, updated_at = datetime('now') WHERE user_id = ?",
@@ -1546,6 +1561,7 @@ def _ingest_order_core(conn, user_id: str, channel_type: str, connector_id: str,
                 current = product.get("stock", 0) or 0
                 product["stock"] = current + quantity if status == "retour" else max(0, current - quantity)
                 product["updatedAt"] = now_iso
+                _stock_event(notify_events, product, current, product["stock"])
 
         next_number = max([o.get("orderNumber", 0) for o in orders], default=1000) + 1
         order = {
@@ -1566,6 +1582,15 @@ def _ingest_order_core(conn, user_id: str, channel_type: str, connector_id: str,
             "updatedAt": now_iso,
         }
         orders.insert(0, order)
+        if status != "retour" and _is_recent(date):
+            product_row = next((p for p in products if p["id"] == product_id), None) if product_id else None
+            notify_events.insert(0, {
+                "kind": "sale", "customer": customer_name, "amount": round(amount, 2), "quantity": quantity,
+                "product": product_row.get("name") if product_row else None, "channel": connector_label_for(data, channel_type),
+                "country": country, "ref": external_id or str(next_number),
+            })
+        if _is_recent(date):
+            _queue_events(conn, user_id, data, notify_events)
 
         new_data = json.dumps(data)
         if len(new_data) > MAX_STATE_BYTES:
@@ -2175,6 +2200,254 @@ def handle_health():
     return 200, {"ok": True, "db": True, "backup": {"status": status, "lastSuccessAt": last, "lastError": BACKUP_STATE.get("lastError")}}
 
 
+# ---------------------------------------------------------------------------------------
+# Email notifications (new sales, low stock). Events are queued while an order is ingested
+# and sent by a background worker as ONE grouped email: a bulk resync of 500 orders must
+# never mean 500 emails. Preferences live in the account's state document
+# (data["notifications"]) so the Paramètres screen and the server share one source of truth.
+# ---------------------------------------------------------------------------------------
+NOTIFY_DEFAULTS = {"sales": True, "stock": True, "frequency": "instant"}
+NOTIFY_COALESCE_SECONDS = 120     # wait a little so a burst of orders becomes one email
+NOTIFY_MIN_GAP_SECONDS = 300      # instant mode: at most one email every 5 minutes
+NOTIFY_DIGEST_HOUR = 8            # daily mode: sent once a day from 08:00 (Paris)
+NOTIFY_MAX_ITEMS = 10             # rows listed per section, the rest is summarised
+NOTIFY_RECENT_DAYS = 3            # a backfilled old order is history, not news
+_TEST_MAIL_LAST = {}
+
+
+def notify_prefs(data):
+    raw = data.get("notifications") if isinstance(data, dict) else None
+    prefs = dict(NOTIFY_DEFAULTS)
+    if isinstance(raw, dict):
+        for key in ("sales", "stock"):
+            if isinstance(raw.get(key), bool):
+                prefs[key] = raw[key]
+        if raw.get("frequency") in ("instant", "daily"):
+            prefs["frequency"] = raw["frequency"]
+    return prefs
+
+
+def _is_recent(date_str):
+    try:
+        d = datetime.fromisoformat(str(date_str).replace("Z", "+00:00"))
+        if d.tzinfo is None:
+            d = d.replace(tzinfo=timezone.utc)
+        return datetime.now(timezone.utc) - d <= timedelta(days=NOTIFY_RECENT_DAYS)
+    except (ValueError, TypeError):
+        return True
+
+
+def _stock_event(events, product, before, after):
+    """Only the moment stock CROSSES a line is news — not every sale while already low."""
+    if after >= before:
+        return
+    threshold = product.get("threshold", 10) or 0
+    if after <= 0 < before:
+        level = "out"
+    elif before > threshold >= after and after > 0:
+        level = "low"
+    else:
+        return
+    events.append({"kind": "stock", "name": product.get("name", "Produit"), "stock": after, "threshold": threshold, "level": level})
+
+
+CHANNEL_LABELS = {"shopify": "Shopify", "woocommerce": "WooCommerce", "custom": "Site personnalisé", "etsy": "Etsy", "instagram": "Instagram Shop", "tiktok": "TikTok Shop"}
+
+
+def connector_label_for(data, channel_type):
+    for c in (data.get("connectors") or []):
+        if isinstance(c, dict) and c.get("type") == channel_type and c.get("label"):
+            return str(c["label"])
+    return CHANNEL_LABELS.get(channel_type, channel_type)
+
+
+def _queue_events(conn, user_id, data, events):
+    if not events:
+        return
+    prefs = notify_prefs(data)
+    for ev in events:
+        wanted = prefs["sales"] if ev["kind"] == "sale" else prefs["stock"]
+        if wanted:
+            conn.execute("INSERT INTO notification_queue (user_id, kind, payload) VALUES (?, ?, ?)", (user_id, ev["kind"], json.dumps(ev)))
+
+
+def _eur(amount):
+    return f"{float(amount):,.2f}".replace(",", " ").replace(".", ",") + " €"
+
+
+def _flag(cc):
+    return "".join(chr(0x1F1E6 + ord(c) - 65) for c in cc.upper()) if isinstance(cc, str) and len(cc) == 2 and cc.isalpha() else ""
+
+
+def build_notification_email(events):
+    """Returns (subject, text, html) for a list of queued events — the single template used
+    for every notification (also for the preview and test email in Paramètres)."""
+    sales = [e for e in events if e.get("kind") == "sale"]
+    stocks = [e for e in events if e.get("kind") == "stock"]
+    parts, text_lines = [], []
+    if sales:
+        total = sum(float(e.get("amount", 0)) for e in sales)
+        rows = ""
+        for e in sales[:NOTIFY_MAX_ITEMS]:
+            who = html.escape(str(e.get("customer", "Client")))
+            flag = _flag(e.get("country"))
+            prod = html.escape(str(e.get("product") or "—")) + (f" × {int(e.get('quantity', 1))}" if e.get("product") else "")
+            rows += (
+                f'<tr><td style="padding:10px 0; border-bottom:1px solid #E1E3DC;">'
+                f'<div style="font-size:14px; font-weight:700; color:#1B211D;">{flag + " " if flag else ""}{who}</div>'
+                f'<div style="font-size:12.5px; color:#8A9186;">{prod} · {html.escape(str(e.get("channel", "")))}</div></td>'
+                f'<td align="right" style="padding:10px 0; border-bottom:1px solid #E1E3DC; font-size:15px; font-weight:800; color:#146356; white-space:nowrap;">{_eur(e.get("amount", 0))}</td></tr>'
+            )
+            text_lines.append(f"- {e.get('customer', 'Client')} : {_eur(e.get('amount', 0))} ({e.get('product') or 'sans produit'})")
+        more = len(sales) - NOTIFY_MAX_ITEMS
+        if more > 0:
+            rows += f'<tr><td colspan="2" style="padding:10px 0; font-size:12.5px; color:#8A9186;">… et {more} autre{"s" if more > 1 else ""} vente{"s" if more > 1 else ""}</td></tr>'
+            text_lines.append(f"… et {more} autres ventes")
+        title = "Nouvelle vente" if len(sales) == 1 else f"{len(sales)} nouvelles ventes"
+        parts.append(
+            f'<div style="font-size:11.5px; letter-spacing:.08em; text-transform:uppercase; color:#8A9186; font-weight:700; margin:4px 0 2px;">{title}'
+            + (f" · {_eur(total)}" if len(sales) > 1 else "") + "</div>"
+            f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:18px;">{rows}</table>'
+        )
+    if stocks:
+        rows = ""
+        for e in stocks[:NOTIFY_MAX_ITEMS]:
+            out = e.get("level") == "out"
+            pill = ('<span style="background:#FBE4E4; color:#B3261E; padding:3px 9px; border-radius:10px; font-size:12px; font-weight:700;">Rupture</span>' if out
+                    else f'<span style="background:#FDF0D5; color:#8A5A00; padding:3px 9px; border-radius:10px; font-size:12px; font-weight:700;">{int(e.get("stock", 0))} restant{"s" if int(e.get("stock", 0)) > 1 else ""}</span>')
+            rows += (
+                f'<tr><td style="padding:10px 0; border-bottom:1px solid #E1E3DC; font-size:14px; font-weight:700; color:#1B211D;">{html.escape(str(e.get("name", "")))}'
+                f'<div style="font-size:12.5px; font-weight:400; color:#8A9186;">Seuil d\'alerte : {int(e.get("threshold", 0))}</div></td>'
+                f'<td align="right" style="padding:10px 0; border-bottom:1px solid #E1E3DC;">{pill}</td></tr>'
+            )
+            text_lines.append(f"- {e.get('name')} : {'rupture' if out else str(int(e.get('stock', 0))) + ' restant(s)'} (seuil {int(e.get('threshold', 0))})")
+        parts.append(
+            '<div style="font-size:11.5px; letter-spacing:.08em; text-transform:uppercase; color:#8A9186; font-weight:700; margin:4px 0 2px;">Stock à surveiller</div>'
+            f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:8px;">{rows}</table>'
+        )
+    if sales and stocks:
+        heading = f"{len(sales)} vente{'s' if len(sales) > 1 else ''} et {len(stocks)} alerte{'s' if len(stocks) > 1 else ''} de stock"
+        subject = f"Comptoir — {heading}"
+        target = "#"
+    elif sales:
+        heading = f"Nouvelle vente de {_eur(sales[0].get('amount', 0))}" if len(sales) == 1 else f"{len(sales)} nouvelles ventes"
+        subject = f"Comptoir — {heading}" + (f" · {sales[0].get('customer', '')}" if len(sales) == 1 else "")
+        target = "#ventes"
+    else:
+        out_count = sum(1 for e in stocks if e.get("level") == "out")
+        heading = f"{stocks[0].get('name')} : {'rupture de stock' if stocks[0].get('level') == 'out' else 'stock bas'}" if len(stocks) == 1 else f"{len(stocks)} produits à réapprovisionner"
+        subject = f"Comptoir — {heading}"
+        target = "#stock"
+    footnote = (
+        "Vous recevez cet email car les notifications sont activées sur votre compte. "
+        f'<a href="{PUBLIC_BASE_URL}/#parametres" style="color:#146356;">Les modifier ou les désactiver</a> dans Paramètres.'
+    )
+    body = "".join(parts)
+    html_body = branded_email_html(heading, body, footnote, "Ouvrir Comptoir", f"{PUBLIC_BASE_URL}/{target}")
+    text = heading + "\n\n" + "\n".join(text_lines) + f"\n\nOuvrir Comptoir : {PUBLIC_BASE_URL}/{target}\nModifier ou désactiver les notifications : {PUBLIC_BASE_URL}/#parametres"
+    return subject, text, html_body
+
+
+def _sample_events(kind="digest"):
+    sale = {"kind": "sale", "customer": "Marie Dupont", "amount": 42.9, "product": "Bougie parfumée Cèdre", "quantity": 2, "channel": "Shopify", "country": "FR"}
+    sale2 = {"kind": "sale", "customer": "Lucas Martin", "amount": 89.0, "product": "Plaid en laine", "quantity": 1, "channel": "Site personnalisé", "country": "BE"}
+    low = {"kind": "stock", "name": "Bougie parfumée Cèdre", "stock": 4, "threshold": 10, "level": "low"}
+    out = {"kind": "stock", "name": "Savon artisanal", "stock": 0, "threshold": 10, "level": "out"}
+    return {"sale": [sale], "stock": [low, out], "digest": [sale, sale2, low, out]}.get(kind, [sale, low])
+
+
+def handle_notification_preview(token, params):
+    user = user_from_token(token)
+    if not user:
+        raise ApiError(401, "Session invalide ou expirée.")
+    kind = params.get("type", "digest")
+    subject, _text, html_body = build_notification_email(_sample_events(kind))
+    return {"subject": subject, "html": html_body}
+
+
+def handle_notification_test(token):
+    user = user_from_token(token)
+    if not user:
+        raise ApiError(401, "Session invalide ou expirée.")
+    now = time.time()
+    if now - _TEST_MAIL_LAST.get(user["id"], 0) < 30:
+        raise ApiError(429, "Un email de test vient d'être envoyé : patientez quelques secondes.")
+    _TEST_MAIL_LAST[user["id"]] = now
+    subject, text, html_body = build_notification_email(_sample_events("digest"))
+    send_email(user["email"], "[Test] " + subject, text, html_body)
+    return {"ok": True, "sent": bool(BREVO_API_KEY), "to": user["email"]}
+
+
+def _paris_now():
+    try:
+        from zoneinfo import ZoneInfo
+        return datetime.now(ZoneInfo("Europe/Paris"))
+    except Exception:
+        return datetime.now(timezone.utc) + timedelta(hours=2)
+
+
+def process_notifications():
+    """One pass of the notification worker: for every account with queued events, decide
+    whether it's time to send (instant mode: after a short coalescing delay and at most every
+    few minutes; daily mode: once a day from 08:00), then send a single grouped email."""
+    conn = get_db()
+    try:
+        users = conn.execute("SELECT user_id, MIN(created_at) AS oldest FROM notification_queue GROUP BY user_id").fetchall()
+        for u in users:
+            uid = u["user_id"]
+            urow = conn.execute("SELECT email, email_verified_at, plan_status FROM users WHERE id = ?", (uid,)).fetchone()
+            srow = conn.execute("SELECT data FROM app_state WHERE user_id = ?", (uid,)).fetchone()
+            if not urow or not srow or not urow["email_verified_at"] or urow["plan_status"] not in ("active", "trialing", "past_due"):
+                conn.execute("DELETE FROM notification_queue WHERE user_id = ?", (uid,))
+                continue
+            try:
+                prefs = notify_prefs(json.loads(srow["data"]))
+            except json.JSONDecodeError:
+                prefs = dict(NOTIFY_DEFAULTS)
+            last = conn.execute("SELECT last_sent_at FROM notification_state WHERE user_id = ?", (uid,)).fetchone()
+            last_dt = datetime.fromisoformat(last["last_sent_at"]).replace(tzinfo=timezone.utc) if last and last["last_sent_at"] else None
+            oldest = datetime.fromisoformat(u["oldest"]).replace(tzinfo=timezone.utc)
+            now = datetime.now(timezone.utc)
+            if prefs["frequency"] == "daily":
+                paris = _paris_now()
+                if paris.hour < NOTIFY_DIGEST_HOUR:
+                    continue
+                if last_dt and last_dt.astimezone(paris.tzinfo).date() == paris.date():
+                    continue
+            else:
+                if (now - oldest).total_seconds() < NOTIFY_COALESCE_SECONDS:
+                    continue
+                if last_dt and (now - last_dt).total_seconds() < NOTIFY_MIN_GAP_SECONDS:
+                    continue
+            rows = conn.execute("SELECT id, kind, payload FROM notification_queue WHERE user_id = ? ORDER BY id LIMIT 500", (uid,)).fetchall()
+            ids = [r["id"] for r in rows]
+            events = []
+            for r in rows:
+                if (r["kind"] == "sale" and prefs["sales"]) or (r["kind"] == "stock" and prefs["stock"]):
+                    try:
+                        events.append(json.loads(r["payload"]))
+                    except json.JSONDecodeError:
+                        pass
+            if events:
+                subject, text, html_body = build_notification_email(events)
+                send_email(urow["email"], subject, text, html_body)
+            conn.executemany("DELETE FROM notification_queue WHERE id = ?", [(i,) for i in ids])
+            conn.execute("INSERT INTO notification_state (user_id, last_sent_at) VALUES (?, datetime('now')) ON CONFLICT(user_id) DO UPDATE SET last_sent_at = excluded.last_sent_at", (uid,))
+            conn.commit()
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _notify_loop():
+    while True:
+        try:
+            process_notifications()
+        except Exception:
+            traceback.print_exc(file=sys.stderr)
+        time.sleep(30)
+
+
 class Handler(http.server.SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=ROOT, **kwargs)
@@ -2333,6 +2606,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 return self._send_json(200, handle_create_connector(self._bearer_token(), body))
             if path == "/api/connectors/channel":
                 return self._send_json(200, handle_connect_channel(self._bearer_token(), body))
+            if path == "/api/notifications/test":
+                return self._send_json(200, handle_notification_test(self._bearer_token()))
             if path == "/api/tracking/site":
                 return self._send_json(200, handle_tracking_site(self._bearer_token(), body))
             if path == "/api/ingest/orders":
@@ -2372,6 +2647,12 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if path == "/api/me":
             try:
                 return self._send_json(200, handle_me(self._bearer_token()))
+            except ApiError as e:
+                return self._send_json(e.status, {"error": e.message})
+        if path == "/api/notifications/preview":
+            try:
+                params = {k: v[0] for k, v in urllib.parse.parse_qs(parsed.query).items()}
+                return self._send_json(200, handle_notification_preview(self._bearer_token(), params))
             except ApiError as e:
                 return self._send_json(e.status, {"error": e.message})
         if path == "/api/launch":
@@ -2571,6 +2852,7 @@ def main():
     # Daemon: dies with the process, never blocks shutdown. Fires once immediately (so
     # every deploy doubles as a fresh backup) then on BACKUP_INTERVAL_SECONDS after that.
     threading.Thread(target=_backup_loop, daemon=True).start()
+    threading.Thread(target=_notify_loop, daemon=True).start()
     server = http.server.ThreadingHTTPServer(("", port), Handler)
     print(f"Comptoir server running on port {port}  (db: {DB_PATH})")
     try:

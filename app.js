@@ -254,7 +254,8 @@ function emptyState() {
     // (resolve_plan() in server.py) right after login, before it's ever rendered or
     // persisted. A brand-new account really does start with no active plan.
     plan: { tier: null, status: 'inactive', renewsAt: null, freeForever: false },
-    billingHistory: []
+    billingHistory: [],
+    notifications: { sales: true, stock: true, frequency: 'instant' }
   };
 }
 
@@ -275,6 +276,7 @@ function migrateState(s) {
   // Defensive: every collection defaults to empty before anything iterates over it — a
   // state blob missing a field (an older shape, a hand-built test payload, a partial PUT)
   // must degrade gracefully here rather than throw and force a fall-back to stale local data.
+  s.notifications = Object.assign({ sales: true, stock: true, frequency: 'instant' }, s.notifications || {});
   s.orders = s.orders || [];
   s.products = s.products || [];
   s.connectors = s.connectors || [];
@@ -2946,6 +2948,25 @@ function pageParametres() {
       </div>
     </div>
     <div class="card" style="margin-top:14px;">
+      <h2>Notifications par email ${help("Envoyées à l'adresse de votre compte. Les événements sont regroupés : une importation de plusieurs commandes donne un seul email, et l'alerte de stock ne part qu'au moment où un produit passe sous son seuil (puis en rupture). Les anciennes commandes importées ne déclenchent rien.")}</h2>
+      <div class="card-sub">Envoyées à ${escapeHTML(getSession()?.email || '')}</div>
+      <div class="notif-list">
+        <label class="notif-row"><span><b>Nouvelles ventes</b><small>Un email à chaque nouvelle commande reçue (regroupées si plusieurs).</small></span><span class="switch"><input type="checkbox" data-notif="sales" ${state.notifications.sales ? 'checked' : ''}><i></i></span></label>
+        <label class="notif-row"><span><b>Alertes de stock</b><small>Stock bas (sous le seuil) et rupture de stock.</small></span><span class="switch"><input type="checkbox" data-notif="stock" ${state.notifications.stock ? 'checked' : ''}><i></i></span></label>
+      </div>
+      <div class="card-sub" style="margin:14px 0 6px;">Fréquence</div>
+      <div class="range" style="display:inline-flex;">
+        <button data-action="setNotifFrequency" data-frequency="instant" class="${state.notifications.frequency === 'instant' ? 'active' : ''}">Dès que possible (regroupé)</button>
+        <button data-action="setNotifFrequency" data-frequency="daily" class="${state.notifications.frequency === 'daily' ? 'active' : ''}">Résumé quotidien à 8 h</button>
+      </div>
+      <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:16px;">
+        <button class="btn" data-action="sendTestNotif">Envoyer un email de test</button>
+        <button class="btn" data-action="previewNotif" data-type="sale">Modèle : vente</button>
+        <button class="btn" data-action="previewNotif" data-type="stock">Modèle : stock</button>
+        <button class="btn" data-action="previewNotif" data-type="digest">Modèle : résumé</button>
+      </div>
+    </div>
+    <div class="card" style="margin-top:14px;">
       <h2>Mes données ${help("Conformément au RGPD, vous pouvez récupérer toutes les données de votre compte, ou le supprimer définitivement. La suppression efface vos commandes, produits, connecteurs et clés, et résilie votre abonnement. Les factures restent conservées chez Stripe pour les obligations comptables, et les sauvegardes chiffrées disparaissent à leur rotation.")}</h2>
       <div class="card-sub">Export de vos données ou suppression de votre compte.</div>
       <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:10px;">
@@ -3401,6 +3422,30 @@ document.addEventListener('click', e => {
     return;
   }
   if (action === 'setShipSort') { setState({ shipSort: el.dataset.sort === 'desc' ? 'desc' : 'asc' }); return; }
+  if (action === 'setNotifFrequency') {
+    state.notifications.frequency = el.dataset.frequency === 'daily' ? 'daily' : 'instant';
+    persist(); render();
+    toast(state.notifications.frequency === 'daily' ? 'Résumé quotidien à 8 h activé.' : 'Notifications regroupées, dès que possible.');
+    return;
+  }
+  if (action === 'sendTestNotif') {
+    const session = getSession();
+    apiRequest('/api/notifications/test', { method: 'POST', token: session.token, body: {} })
+      .then(r => toast(r.sent ? `Email de test envoyé à ${r.to}.` : 'Envoi d\'email non configuré sur ce serveur (mode local).', !r.sent))
+      .catch(err => toast(err.message, true));
+    return;
+  }
+  if (action === 'previewNotif') {
+    const session = getSession();
+    apiRequest(`/api/notifications/preview?type=${encodeURIComponent(el.dataset.type)}`, { token: session.token }).then(r => {
+      openModal(`<h3>Aperçu de l'email</h3><div class="modal-sub">Objet : ${escapeHTML(r.subject)}</div>
+        <iframe id="notifPreview" sandbox title="Aperçu de l'email" style="width:100%; height:520px; border:1px solid var(--rule-soft); border-radius:8px; background:#fff;"></iframe>
+        <div class="actions"><button class="btn primary" data-action="closeModal">Fermer</button></div>`);
+      document.querySelector('#modalRoot .modal').style.maxWidth = '580px';
+      document.getElementById('notifPreview').srcdoc = r.html;
+    }).catch(err => toast(err.message, true));
+    return;
+  }
   if (action === 'exportMyData') {
     const session = getSession();
     if (!session) return;
@@ -3974,6 +4019,14 @@ document.addEventListener('keydown', e => {
     e.preventDefault();
     e.target.click();
   }
+});
+
+document.addEventListener('change', e => {
+  const key = e.target.dataset && e.target.dataset.notif;
+  if (!key) return;
+  state.notifications[key] = e.target.checked;
+  persist();
+  toast(`${key === 'sales' ? 'Notifications de ventes' : 'Alertes de stock'} ${e.target.checked ? 'activées' : 'désactivées'}.`);
 });
 
 document.addEventListener('input', e => {

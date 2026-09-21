@@ -284,6 +284,118 @@ class TestTracking(ServerCase):
         self.assertEqual(self.api.call("/api/tracking/stats", token=other["token"])[1]["visitors"], 0)
 
 
+class TestNotifications(ServerCase):
+    """Queue is filled by the running server; the worker pass is run in-process against the
+    same database file with email sending replaced by a recorder."""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        import importlib.util
+        os.environ["COMPTOIR_DB_PATH"] = cls.db
+        spec = importlib.util.spec_from_file_location("srv_under_test", os.path.join(ROOT, "server.py"))
+        cls.srv = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.srv)
+        cls.sent = []
+        cls.srv.send_email = lambda to, subject, text, html_body=None: cls.sent.append((to, subject, text))
+
+    def setUp(self):
+        self.acc = self.new_account()
+        self.sent.clear()
+
+    def state(self):
+        return json.loads(self.api.call("/api/state", token=self.acc["token"])[1]["data"])
+
+    def put_state(self, **changes):
+        st = self.state()
+        st.update(changes)
+        self.assertEqual(self.api.call("/api/state", "PUT", {"data": json.dumps(st)}, self.acc["token"])[0], 200)
+
+    def ing(self, body):
+        return self.api.call("/api/ingest/orders", "POST", body, self.acc["key"])
+
+    def flush(self):
+        # age the queue past the coalescing delay, then run one worker pass
+        self.sql("update notification_queue set created_at = datetime('now','-1 hour')")
+        self.sql("delete from notification_state")
+        self.srv.process_notifications()
+
+    def test_sale_is_queued_and_sent_once_grouped(self):
+        for i in range(3):
+            self.ing({"externalId": f"N{i}", "amount": 10 + i, "customerName": f"Client {i}", "status": "preparation"})
+        self.assertEqual(self.sql("select count(*) from notification_queue")[0][0] >= 3, True)
+        self.flush()
+        mine = [m for m in self.sent if m[0] == self.acc["email"]]
+        self.assertEqual(len(mine), 1)
+        self.assertIn("3 nouvelles ventes", mine[0][1])
+
+    def test_old_orders_and_bulk_backfill_do_not_notify(self):
+        old = [{"externalId": f"H{i}", "amount": 5, "date": "2020-01-01T10:00:00Z"} for i in range(20)]
+        self.api.call("/api/ingest/orders/bulk", "POST", {"orders": old}, self.acc["key"])
+        self.flush()
+        self.assertEqual([m for m in self.sent if m[0] == self.acc["email"]], [])
+
+    def test_bulk_of_recent_orders_is_one_email_capped(self):
+        recent = [{"externalId": f"R{i}", "amount": 5} for i in range(25)]
+        self.api.call("/api/ingest/orders/bulk", "POST", {"orders": recent}, self.acc["key"])
+        self.flush()
+        mine = [m for m in self.sent if m[0] == self.acc["email"]]
+        self.assertEqual(len(mine), 1)
+        self.assertIn("25 nouvelles ventes", mine[0][1])
+        self.assertIn("et 15 autres ventes", mine[0][2])
+
+    def test_disabled_sales_are_not_queued(self):
+        self.put_state(notifications={"sales": False, "stock": True, "frequency": "instant"})
+        self.ing({"externalId": "OFF1", "amount": 10})
+        self.assertEqual(self.sql("select count(*) from notification_queue where kind='sale'")[0][0], 0)
+
+    def test_stock_alert_only_when_crossing_the_threshold(self):
+        self.put_state(products=[{"id": "p1", "name": "Bougie", "stock": 11, "threshold": 10, "channels": [], "costPrice": 1, "custom": {}}])
+        self.ing({"externalId": "K1", "amount": 10, "productName": "Bougie"})   # 11 -> 10 : crosses
+        self.ing({"externalId": "K2", "amount": 10, "productName": "Bougie"})   # 10 -> 9  : already low, silent
+        events = [json.loads(r[0]) for r in self.sql("select payload from notification_queue where kind='stock'")]
+        self.assertEqual([e["level"] for e in events], ["low"])
+
+    def test_disabling_after_queueing_drops_the_email(self):
+        self.ing({"externalId": "D1", "amount": 10})
+        self.put_state(notifications={"sales": False, "stock": False, "frequency": "instant"})
+        self.flush()
+        self.assertEqual([m for m in self.sent if m[0] == self.acc["email"]], [])
+
+    def test_daily_mode_waits_for_morning(self):
+        from datetime import datetime, timezone
+        self.put_state(notifications={"sales": True, "stock": True, "frequency": "daily"})
+        self.ing({"externalId": "DL1", "amount": 10})
+        self.sql("update notification_queue set created_at = datetime('now','-1 hour')")
+        self.sql("delete from notification_state")
+        real = self.srv._paris_now
+        try:
+            self.srv._paris_now = lambda: datetime(2026, 9, 21, 6, 0, tzinfo=timezone.utc)
+            self.srv.process_notifications()
+            self.assertEqual([m for m in self.sent if m[0] == self.acc["email"]], [])
+            self.srv._paris_now = lambda: datetime(2026, 9, 21, 9, 0, tzinfo=timezone.utc)
+            self.srv.process_notifications()
+            self.assertEqual(len([m for m in self.sent if m[0] == self.acc["email"]]), 1)
+        finally:
+            self.srv._paris_now = real
+
+    def test_preview_and_test_endpoints(self):
+        self.assertEqual(self.api.call("/api/notifications/preview?type=sale")[0], 401)
+        s, j = self.api.call("/api/notifications/preview?type=digest", token=self.acc["token"])
+        self.assertEqual(s, 200)
+        self.assertIn("<html", j["html"])
+        self.assertIn("Rupture", j["html"])
+        self.assertEqual(self.api.call("/api/notifications/test", "POST", token=self.acc["token"])[0], 200)
+        self.assertEqual(self.api.call("/api/notifications/test", "POST", token=self.acc["token"])[0], 429)
+
+    def test_html_in_data_is_escaped_in_the_email(self):
+        self.ing({"externalId": "XS1", "amount": 10, "customerName": "<script>alert(1)</script>"})
+        self.flush()
+        # the queued payload is rendered with escaping: no raw tag in the HTML template
+        _, _, html_body = self.srv.build_notification_email([{"kind": "sale", "customer": "<script>alert(1)</script>", "amount": 1, "channel": "<b>x</b>"}])
+        self.assertNotIn("<script>alert(1)</script>", html_body)
+
+
 class TestPreLaunch(ServerCase):
     EXTRA_ENV = {"LAUNCH_AT": "2999-01-01T09:00:00+02:00", "SIGNUP_ALLOWLIST": "early@example.com"}
 
