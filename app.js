@@ -3013,6 +3013,23 @@ function renderNav() {
   document.getElementById('planChipLabel').textContent = state.plan.tier ? PLAN_META[state.plan.tier].name : '—';
 }
 
+// Orders past the plan's monthly quota are refused server-side (the merchant's site gets a
+// 402), which used to be invisible in the app itself — so say it, before and when it happens.
+function quotaBannerHTML() {
+  if (state.plan.freeForever || !state.plan.tier || !PLAN_META[state.plan.tier]) return '';
+  const limit = PLAN_META[state.plan.tier].orders;
+  if (!isFinite(limit)) return '';
+  const prefix = new Date().toISOString().slice(0, 7);
+  const used = state.orders.filter(o => o.connectorId && String(o.date || '').startsWith(prefix)).length;
+  if (used < limit * 0.9) return '';
+  const full = used >= limit;
+  return `<div class="verify-banner" style="${full ? 'background:var(--critical-soft); color:var(--critical);' : ''}">
+    <span>${full
+      ? `Quota atteint : ${fmtNum(used)} / ${fmtNum(limit)} commandes ce mois-ci. <b>Les nouvelles commandes de vos plateformes ne sont plus enregistrées.</b> Passez à un forfait supérieur pour reprendre.`
+      : `${fmtNum(used)} / ${fmtNum(limit)} commandes ce mois-ci : vous approchez du quota de votre forfait.`}</span>
+    <a href="#facturation" style="color:inherit; font-weight:700; text-decoration:underline; margin-left:8px;">Voir les forfaits</a>
+  </div>`;
+}
 function verifyEmailBannerHTML() {
   return `<div class="verify-banner">
     <span class="txt">Confirmez votre adresse email pour choisir un forfait et connecter vos canaux de vente — vérifiez votre boîte de réception (et vos spams).</span>
@@ -3027,7 +3044,7 @@ function render() {
   const path = currentPath();
   if (path === 'connecteurs' || path === 'trafic') loadTracking();
   const pages = { '': pageOverview, 'ventes': pageVentes, 'trafic': pageTrafic, 'expeditions': pageExpeditions, 'stock': pageStock, 'catalogue': pageCatalogue, 'sav': pageSAV, 'connecteurs': pageConnecteurs, 'facturation': pageFacturation, 'comptabilite': pageComptabilite, 'parametres': pageParametres };
-  main.innerHTML = (state.emailVerified === false ? verifyEmailBannerHTML() : '') + (pages[path] || pageOverview)();
+  main.innerHTML = (state.emailVerified === false ? verifyEmailBannerHTML() : '') + quotaBannerHTML() + (pages[path] || pageOverview)();
   if (path === '') {
     const bounds = getRangeBounds();
     const granularity = state.overviewGranularity;

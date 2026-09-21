@@ -191,7 +191,7 @@ PLAN_LIMITS = {
 # Accounts that use Comptoir free forever, by explicit one-off agreement — never billed,
 # never blocked by plan limits, regardless of what's in the users table. Keep this list
 # short and deliberate; it bypasses Stripe entirely for whoever's in it.
-FREE_FOREVER_EMAILS = {"killian.belabbes@gmail.com"}
+FREE_FOREVER_EMAILS = {"killian.belabbes@gmail.com"} | {e.strip().lower() for e in (os.environ.get("FREE_FOREVER_EXTRA") or "").split(",") if e.strip()}
 
 STRIPE_SECRET_KEY = os.environ.get("STRIPE_SECRET_KEY")
 STRIPE_WEBHOOK_SECRET = os.environ.get("STRIPE_WEBHOOK_SECRET")
@@ -260,7 +260,7 @@ def resolve_plan(user_row) -> dict:
         return {"tier": "decouverte", "status": "active", "renewsAt": None, "freeForever": True}
     tier = row.get("plan_tier")
     status = row.get("plan_status")
-    if not tier or status != "active":
+    if not tier or status not in ("active", "trialing"):
         return {"tier": None, "status": status or "inactive", "renewsAt": None, "freeForever": False}
     return {"tier": tier, "status": status, "renewsAt": row.get("plan_renews_at"), "freeForever": False}
 
@@ -960,6 +960,15 @@ STATE_LOCK = threading.Lock()
 ORDER_STATUSES = {"livree", "en_route", "preparation", "retour"}
 
 
+def plan_limit(plan, key):
+    """A plan's numeric limit ("channels" / "orders"), or None (unlimited). Free-forever
+    accounts get Découverte's features but are never blocked by its quotas — a real shop
+    forwarding every order must not silently lose them once it passes 50 a month."""
+    if plan.get("freeForever"):
+        return None
+    return PLAN_LIMITS[plan["tier"]][key]
+
+
 def require_active_plan(user):
     """Raises 402 for any account with no active plan — free-forever and grandfathered
     accounts always pass (resolve_plan gives them tier+status='active'); anyone who
@@ -1003,7 +1012,7 @@ def handle_connect_channel(token, body):
         "SELECT 1 FROM connected_channels WHERE user_id = ? AND channel_type = ?", (user["id"], channel_type)
     ).fetchone()
     if not already:
-        limit = PLAN_LIMITS[plan["tier"]]["channels"]
+        limit = plan_limit(plan, "channels")
         current = count_connected_channels(conn, user["id"])
         if limit is not None and current >= limit:
             conn.close()
@@ -1051,7 +1060,7 @@ def handle_create_connector(token, body, channel_type: str = "custom"):
         "SELECT 1 FROM connected_channels WHERE user_id = ? AND channel_type = ?", (user["id"], channel_type)
     ).fetchone()
     if not already:
-        limit = PLAN_LIMITS[plan["tier"]]["channels"]
+        limit = plan_limit(plan, "channels")
         current = count_connected_channels(conn, user["id"])
         if limit is not None and current >= limit:
             conn.close()
@@ -1550,7 +1559,7 @@ def _ingest_order_core(conn, user_id: str, channel_type: str, connector_id: str,
         ).fetchone()
         if user_row:
             plan = require_active_plan(user_row)
-            limit = PLAN_LIMITS[plan["tier"]]["orders"]
+            limit = plan_limit(plan, "orders")
             if limit is not None:
                 month_prefix = datetime.now(timezone.utc).strftime("%Y-%m")
                 this_month_count = sum(
@@ -1559,6 +1568,7 @@ def _ingest_order_core(conn, user_id: str, channel_type: str, connector_id: str,
                 )
                 if this_month_count >= limit:
                     conn.close()
+                    print(f"[commande refusée — quota mensuel atteint] user={user_id} plan={plan['tier']} limite={limit}", file=sys.stderr)
                     raise ApiError(402, f"Votre forfait autorise {limit} commandes par mois maximum — passez à un forfait supérieur.")
 
         product_id = None
@@ -1784,7 +1794,7 @@ def handle_shopify_install(token, body):
         "SELECT 1 FROM connected_channels WHERE user_id = ? AND channel_type = 'shopify'", (user["id"],)
     ).fetchone()
     if not already:
-        limit = PLAN_LIMITS[plan["tier"]]["channels"]
+        limit = plan_limit(plan, "channels")
         current = count_connected_channels(conn, user["id"])
         if limit is not None and current >= limit:
             conn.close()
@@ -1854,7 +1864,7 @@ def handle_shopify_callback(params: dict):
             "SELECT 1 FROM connected_channels WHERE user_id = ? AND channel_type = 'shopify'", (user_id,)
         ).fetchone()
         if not already:
-            limit = PLAN_LIMITS[plan["tier"]]["channels"]
+            limit = plan_limit(plan, "channels")
             current = count_connected_channels(conn, user_id)
             if limit is not None and current >= limit:
                 conn.close()

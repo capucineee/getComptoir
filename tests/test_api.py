@@ -498,6 +498,28 @@ class TestTrial(ServerCase):
         self.assertEqual(self.api.call("/api/launch")[1]["trialDays"], 30)
 
 
+class TestPlanRules(ServerCase):
+    EXTRA_ENV = {"LAUNCH_AT": "2000-01-01T00:00:00+00:00", "FREE_FOREVER_EXTRA": "vip@example.com"}
+
+    def test_trialing_subscription_counts_as_a_plan(self):
+        acc = self.new_account()
+        self.sql("update users set plan_status='trialing' where email=?", acc["email"])
+        s, j = self.api.call("/api/me", token=acc["token"])
+        self.assertEqual((j["plan"]["tier"], j["plan"]["status"]), ("croissance", "trialing"))
+        self.assertEqual(self.api.call("/api/ingest/orders", "POST", {"externalId": "TR1", "amount": 5}, acc["key"])[0], 200)
+
+    def test_free_forever_account_is_never_blocked_by_the_order_quota(self):
+        email = "vip@example.com"
+        s, j = self.api.call("/api/signup", "POST", {"email": email, "password": "Passw0rd!x", "acceptTerms": True})
+        tok = j["token"]
+        self.sql("update users set email_verified_at=datetime('now') where email=?", email)
+        empty = {"orders": [], "products": [], "connectors": [], "customFields": [], "expenses": []}
+        self.api.call("/api/state", "PUT", {"data": json.dumps(empty)}, tok)
+        key = self.api.call("/api/connectors/custom", "POST", {"label": "Site"}, tok)[1]["apiKey"]
+        codes = [self.api.call("/api/ingest/orders", "POST", {"externalId": f"V{i}", "amount": 5}, key)[0] for i in range(60)]
+        self.assertEqual(codes.count(200), 60)
+
+
 class TestPreLaunch(ServerCase):
     EXTRA_ENV = {"LAUNCH_AT": "2999-01-01T09:00:00+02:00", "SIGNUP_ALLOWLIST": "early@example.com"}
 
