@@ -2541,7 +2541,7 @@ def build_monthly_email(sm):
 
 def _sample_month_summary():
     return {"label": "septembre 2026", "orders": 62, "returns": 6, "returnRate": 8.8, "ca": 2245.33, "avgBasket": 36.22, "caDelta": 12.4,
-            "tva": 374.22, "cost": 512.0, "expenses": 71.0, "net": 914.11,
+            "tva": 374.22, "cost": 512.0, "expenses": 71.0, "net": 1288.11,
             "topProducts": [("Bougie parfumée Cèdre", 41), ("Savon artisanal", 28), ("Vase en grès", 9)], "topCountries": [("FR", 48), ("BE", 9), ("CH", 5)],
             "missingCost": ["Plaid en laine"], "noExpenses": False}
 
