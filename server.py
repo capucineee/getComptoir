@@ -193,6 +193,13 @@ PLAN_LIMITS = {
 # short and deliberate; it bypasses Stripe entirely for whoever's in it.
 FREE_FOREVER_EMAILS = {"killian.belabbes@gmail.com"} | {e.strip().lower() for e in (os.environ.get("FREE_FOREVER_EXTRA") or "").split(",") if e.strip()}
 
+# Owner-only admin dashboard (traffic, plans, connected channels across every account).
+# Hardcoded rather than a plan/flag on the account: this is about who runs Comptoir, not
+# what any customer is subscribed to, and must keep working even for an account with no
+# subscription at all. ADMIN_EMAILS_EXTRA can add more, comma-separated.
+ADMIN_EMAILS = {"capucine.ehkirch@gmail.com"} | {e.strip().lower() for e in (os.environ.get("ADMIN_EMAILS_EXTRA") or "").split(",") if e.strip()}
+MARKETING_SITE_KEY = "cmp_getcomptoir"  # t.js on index.html reports here — see handle_track
+
 STRIPE_SECRET_KEY = os.environ.get("STRIPE_SECRET_KEY")
 STRIPE_WEBHOOK_SECRET = os.environ.get("STRIPE_WEBHOOK_SECRET")
 # One Stripe Price ID per tier (a recurring monthly price configured in the Stripe
@@ -393,6 +400,14 @@ def init_db():
         CREATE TABLE IF NOT EXISTS notification_state (
             user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
             last_sent_at TEXT
+        );
+        CREATE TABLE IF NOT EXISTS marketing_stats (
+            day TEXT NOT NULL,
+            country TEXT NOT NULL DEFAULT '',
+            source TEXT NOT NULL DEFAULT 'Direct',
+            visitors INTEGER NOT NULL DEFAULT 0,
+            views INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (day, country, source)
         );
         CREATE TABLE IF NOT EXISTS tracking_sites (
             site_key TEXT PRIMARY KEY,
@@ -875,6 +890,73 @@ def handle_get_state(token):
     row = conn.execute("SELECT data FROM app_state WHERE user_id = ?", (user["id"],)).fetchone()
     conn.close()
     return {"data": row["data"] if row else None}
+
+
+# ---------------------------------------------------------------------------------------
+# Owner-only admin dashboard: getcomptoir.fr's own traffic/conversion, and every account
+# with its plan and connected channel types. Read-only, and deliberately never touches or
+# returns a customer's business data (orders, products...) — just account-level metadata
+# already sitting in the relational tables (users, connected_channels), plus the site's
+# own marketing_stats.
+# ---------------------------------------------------------------------------------------
+def require_admin(token):
+    user = user_from_token(token)
+    if not user or str(user.get("email", "")).lower() not in ADMIN_EMAILS:
+        raise ApiError(403, "Accès réservé.")
+    return user
+
+
+def handle_admin_overview(token, params):
+    require_admin(token)
+    date_re = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+    to_day = params.get("to") if date_re.match(params.get("to", "")) else datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    from_day = params.get("from") if date_re.match(params.get("from", "")) else (datetime.now(timezone.utc) - timedelta(days=29)).strftime("%Y-%m-%d")
+    conn = get_db()
+    try:
+        rows = conn.execute(
+            """SELECT id, email, plan_tier, plan_status, plan_renews_at, trial_used_at, email_verified_at, created_at
+               FROM users ORDER BY created_at DESC"""
+        ).fetchall()
+        channels_by_user = {}
+        for r in conn.execute("SELECT user_id, channel_type, connected_at FROM connected_channels"):
+            channels_by_user.setdefault(r["user_id"], []).append({"type": r["channel_type"], "connectedAt": r["connected_at"]})
+        accounts = []
+        by_plan, by_status, by_channel = {}, {}, {}
+        for r in rows:
+            free = r["email"].lower() in FREE_FOREVER_EMAILS
+            tier = "decouverte" if free else r["plan_tier"]
+            status = "active" if free else (r["plan_status"] or "inactive")
+            channels = channels_by_user.get(r["id"], [])
+            accounts.append({
+                "email": r["email"], "planTier": tier, "planStatus": status, "freeForever": free,
+                "renewsAt": r["plan_renews_at"], "trialUsed": bool(r["trial_used_at"]),
+                "emailVerified": r["email_verified_at"] is not None, "createdAt": r["created_at"],
+                "channels": [c["type"] for c in channels],
+            })
+            if tier:
+                by_plan[tier] = by_plan.get(tier, 0) + 1
+            by_status[status] = by_status.get(status, 0) + 1
+            for c in channels:
+                by_channel[c["type"]] = by_channel.get(c["type"], 0) + 1
+        signups_in_range = sum(1 for r in rows if from_day <= str(r["created_at"])[:10] <= to_day)
+        marketing = {"visitors": 0, "views": 0, "daily": [], "sources": [], "countries": []}
+        rng = (from_day, to_day)
+        marketing["daily"] = [{"day": r["day"], "visitors": r["v"]} for r in conn.execute(
+            "SELECT day, SUM(visitors) v FROM marketing_stats WHERE day BETWEEN ? AND ? GROUP BY day ORDER BY day", rng)]
+        marketing["sources"] = [{"source": r["source"], "visitors": r["v"]} for r in conn.execute(
+            "SELECT source, SUM(visitors) v FROM marketing_stats WHERE day BETWEEN ? AND ? GROUP BY source HAVING v > 0 ORDER BY v DESC LIMIT 8", rng)]
+        marketing["countries"] = [{"country": r["country"], "visitors": r["v"]} for r in conn.execute(
+            "SELECT country, SUM(visitors) v FROM marketing_stats WHERE day BETWEEN ? AND ? GROUP BY country HAVING v > 0 ORDER BY v DESC LIMIT 8", rng)]
+        marketing["visitors"] = sum(d["visitors"] for d in marketing["daily"])
+        marketing["views"] = conn.execute("SELECT COALESCE(SUM(views),0) FROM marketing_stats WHERE day BETWEEN ? AND ?", rng).fetchone()[0]
+        conversion = (signups_in_range / marketing["visitors"] * 100) if marketing["visitors"] else 0.0
+        return {
+            "accounts": accounts,
+            "totals": {"accounts": len(rows), "byPlan": by_plan, "byStatus": by_status, "byChannel": by_channel, "signupsInRange": signups_in_range},
+            "marketing": marketing, "conversion": conversion,
+        }
+    finally:
+        conn.close()
 
 
 def _parse_ts(ts):
@@ -2073,17 +2155,23 @@ def handle_track(body, headers, client_ip):
     source = _classify_source(str(body.get("ref", ""))[:500], str(body.get("url", ""))[:500])
     country = _visitor_country(headers, str(body.get("tz", ""))[:60], str(body.get("lang", ""))[:20])
     vhash = hashlib.sha256(f"{TRACK_SALT}|{day}|{site_key}|{client_ip}|{ua}".encode()).hexdigest()
+    is_marketing = site_key == MARKETING_SITE_KEY
     conn = get_db()
     try:
-        if not conn.execute("SELECT 1 FROM tracking_sites WHERE site_key = ?", (site_key,)).fetchone():
+        if not is_marketing and not conn.execute("SELECT 1 FROM tracking_sites WHERE site_key = ?", (site_key,)).fetchone():
             return
         first_today = conn.execute("INSERT OR IGNORE INTO tracking_seen (hash, day) VALUES (?, ?)", (vhash, day)).rowcount > 0
+        table = "marketing_stats" if is_marketing else "tracking_stats"
+        cols = "(day, country, source, visitors, views)" if is_marketing else "(site_key, day, country, source, visitors, views)"
+        vals = (day, country, source, 1 if first_today else 0) if is_marketing else (site_key, day, country, source, 1 if first_today else 0)
+        conflict_key = "(day, country, source)" if is_marketing else "(site_key, day, country, source)"
         conn.execute(
-            """INSERT INTO tracking_stats (site_key, day, country, source, visitors, views) VALUES (?, ?, ?, ?, ?, 1)
-               ON CONFLICT(site_key, day, country, source) DO UPDATE SET visitors = visitors + excluded.visitors, views = views + 1""",
-            (site_key, day, country, source, 1 if first_today else 0),
+            f"""INSERT INTO {table} {cols} VALUES ({",".join("?" * len(vals))}, 1)
+               ON CONFLICT{conflict_key} DO UPDATE SET visitors = visitors + excluded.visitors, views = views + 1""",
+            vals,
         )
-        conn.execute("UPDATE tracking_sites SET last_seen_at = datetime('now') WHERE site_key = ?", (site_key,))
+        if not is_marketing:
+            conn.execute("UPDATE tracking_sites SET last_seen_at = datetime('now') WHERE site_key = ?", (site_key,))
         if secrets.randbelow(100) == 0:
             conn.execute("DELETE FROM tracking_seen WHERE day < ?", (day,))
         conn.commit()
@@ -2849,6 +2937,12 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 return self._send_json(e.status, {"error": e.message})
         if path == "/api/launch":
             return self._send_json(200, handle_launch())
+        if path == "/api/admin/overview":
+            try:
+                params = {k: v[0] for k, v in urllib.parse.parse_qs(parsed.query).items()}
+                return self._send_json(200, handle_admin_overview(self._bearer_token(), params))
+            except ApiError as e:
+                return self._send_json(e.status, {"error": e.message})
         if path == "/api/health":
             status, payload = handle_health()
             return self._send_json(status, payload)

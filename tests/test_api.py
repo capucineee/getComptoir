@@ -444,6 +444,54 @@ class TestNotifications(ServerCase):
         self.assertNotIn("<script>alert(1)</script>", html_body)
 
 
+class TestAdmin(ServerCase):
+    EXTRA_ENV = {"LAUNCH_AT": "2000-01-01T00:00:00+00:00", "ADMIN_EMAILS_EXTRA": "boss@example.com"}
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        s, j = cls.api.call("/api/signup", "POST", {"email": "boss@example.com", "password": "Passw0rd!x", "acceptTerms": True})
+        assert s == 200, j
+        cls.admin_tok = j["token"]
+
+    def admin_token(self):
+        return self.admin_tok
+
+    def test_non_admin_refused(self):
+        acc = self.new_account()
+        self.assertEqual(self.api.call("/api/admin/overview", token=acc["token"])[0], 403)
+        self.assertEqual(self.api.call("/api/admin/overview")[0], 403)
+
+    def test_admin_sees_accounts_plans_and_channels(self):
+        a = self.new_account(plan="multicanal")
+        self.api.call("/api/connectors/woocommerce", "POST", {"label": "Boutique"}, a["token"])
+        admin_tok = self.admin_token()
+        s, j = self.api.call("/api/admin/overview", token=admin_tok)
+        self.assertEqual(s, 200)
+        self.assertGreaterEqual(j["totals"]["accounts"], 2)
+        row = next(x for x in j["accounts"] if x["email"] == a["email"])
+        self.assertEqual(row["planTier"], "multicanal")
+        self.assertIn("custom", row["channels"])
+        self.assertIn("woocommerce", row["channels"])
+        self.assertIn("multicanal", j["totals"]["byPlan"])
+        self.assertIn("woocommerce", j["totals"]["byChannel"])
+
+    def test_marketing_beacon_accepted_without_a_tracking_sites_row(self):
+        req_body = json.dumps({"site": "cmp_getcomptoir", "url": "https://getcomptoir.fr/", "ref": "https://www.google.com/", "tz": "Europe/Paris", "lang": "fr-FR"}).encode()
+        s, _ = self.api.call("/api/track", "POST", raw=req_body, headers={"Content-Type": "text/plain", "User-Agent": "Mozilla/5.0 Safari"})
+        self.assertEqual(s, 204)
+        s, j = self.api.call("/api/admin/overview", token=self.admin_token())
+        self.assertEqual(j["marketing"]["visitors"], 1)
+        self.assertEqual(j["marketing"]["sources"], [{"source": "Google", "visitors": 1}])
+
+    def test_free_forever_account_shown_as_gratuit_a_vie(self):
+        self.sql("insert into users (id, email, password_hash, password_salt, email_verified_at, created_at) values ('kfree','killian.belabbes@gmail.com','x','x',datetime('now'),datetime('now'))")
+        s, j = self.api.call("/api/admin/overview", token=self.admin_token())
+        row = next(x for x in j["accounts"] if x["email"] == "killian.belabbes@gmail.com")
+        self.assertTrue(row["freeForever"])
+        self.assertEqual(row["planStatus"], "active")
+
+
 class TestTrial(ServerCase):
     """Free first month: checked in-process by capturing what is sent to Stripe."""
 

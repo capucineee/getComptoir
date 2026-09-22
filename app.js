@@ -1240,6 +1240,10 @@ function openModal(html, onMount) {
 function closeModal() { document.getElementById('modalRoot').innerHTML = ''; }
 
 /* ---------- router ---------- */
+// Owner-only nav entry: this only decides whether the link is drawn — the API is the real
+// gate (403 for anyone else), so a client edit can never actually see someone else's data.
+const ADMIN_EMAIL = 'capucine.ehkirch@gmail.com';
+function isAdminSession() { return (getSession()?.email || '').toLowerCase() === ADMIN_EMAIL; }
 const ROUTES = [
   { path: '', label: "Vue d'ensemble", icon: 'M2 9h3v5H2zM6.5 5h3v9h-3zM11 2h3v12h-3z' },
   { path: 'ventes', label: 'Ventes', icon: null },
@@ -1253,6 +1257,7 @@ const ROUTES = [
   { path: 'comptabilite', label: 'Comptabilité', icon: null },
   { path: 'parametres', label: 'Paramètres', icon: null }
 ];
+const ADMIN_ROUTE = { path: 'admin', label: 'Admin', icon: null };
 function currentPath() { return (location.hash || '#').slice(1); }
 window.addEventListener('hashchange', render);
 
@@ -2347,6 +2352,77 @@ function openBlockModal(orderId) {
   `);
 }
 
+/* ---------- page: admin (owner-only — server enforces this regardless of the client) ---------- */
+let adminData = null, adminRange = '30', adminInflight = false;
+async function loadAdmin(force = false) {
+  const session = getSession();
+  if (!session || adminInflight) return;
+  adminInflight = true;
+  try {
+    const to = new Date().toISOString().slice(0, 10);
+    const from = new Date(Date.now() - Number(adminRange) * 86400000).toISOString().slice(0, 10);
+    adminData = await apiRequest(`/api/admin/overview?from=${from}&to=${to}`, { token: session.token });
+    if (currentPath() === 'admin') render();
+  } catch (e) { adminData = { error: e.message }; if (currentPath() === 'admin') render(); }
+  finally { adminInflight = false; }
+}
+const PLAN_LABELS = { decouverte: 'Découverte', multicanal: 'Multicanal', croissance: 'Croissance' };
+const ADMIN_STATUS_LABELS = { active: 'Actif', trialing: 'Essai', past_due: 'Paiement en retard', canceled: 'Résilié', unpaid: 'Impayé', inactive: 'Inactif' };
+function pageAdmin() {
+  if (!isAdminSession()) return `<div class="topbar"><div><h1>Admin</h1></div></div><div class="card"><div class="empty">Cette page est réservée.</div></div>`;
+  const d = adminData;
+  const todayISO = new Date().toISOString().slice(0, 10);
+  const rangeBar = `<div class="range">${['7', '30', '90'].map(r => `<button data-action="setAdminRange" data-range="${r}" class="${adminRange === r ? 'active' : ''}">${r} j</button>`).join('')}</div>`;
+  if (!d) { loadAdmin(); return `<div class="topbar"><div><h1>Admin</h1><div class="sub">Vue interne — visible par vous seul</div></div><div class="topbar-actions">${rangeBar}${themeToggleHTML()}</div></div><div class="card"><div class="empty">Chargement…</div></div>`; }
+  if (d.error) return `<div class="topbar"><div><h1>Admin</h1></div></div><div class="card"><div class="empty">${escapeHTML(d.error)}</div></div>`;
+  const m = d.marketing, t = d.totals;
+  const sp = m.daily.length > 1 ? sparkline(m.daily.map(x => x.visitors), 'var(--brand)') : '';
+  const bars = (rows, tot, labelFn) => rows.map(r => `
+    <div class="chan-row"><div class="top"><span>${labelFn(r)}</span><span class="pct">${Math.round(r.visitors / tot * 100)}%</span></div>
+    <div class="chan-bar"><div style="width:${r.visitors / tot * 100}%; background:var(--brand)"></div></div></div>`).join('');
+  const totalSrc = m.sources.reduce((a, r) => a + r.visitors, 0) || 1, totalC = m.countries.reduce((a, r) => a + r.visitors, 0) || 1;
+  const planRows = ['decouverte', 'multicanal', 'croissance'].map(k => `<div class="chan-row"><div class="top"><span>${PLAN_LABELS[k]}</span><span class="pct">${fmtNum(t.byPlan[k] || 0)}</span></div><div class="chan-bar"><div style="width:${(t.byPlan[k] || 0) / t.accounts * 100}%; background:var(--brand)"></div></div></div>`).join('');
+  const channelRows = Object.entries(t.byChannel).sort((a, b) => b[1] - a[1]).map(([k, v]) => `<div class="chan-row"><div class="top"><span>${connectorLabel(k)}</span><span class="pct">${fmtNum(v)}</span></div><div class="chan-bar"><div style="width:${v / t.accounts * 100}%; background:${channelColor(k)}"></div></div></div>`).join('');
+  const ADMIN_STATUS_CLASS = { active: 'good', trialing: 'good', past_due: 'critical', canceled: 'warning', unpaid: 'critical', inactive: 'warning' };
+  const rows = d.accounts.map(a => {
+    const cls = ADMIN_STATUS_CLASS[a.planStatus] || 'warning';
+    return `<tr>
+      <td data-label="Compte">${escapeHTML(a.email)}${!a.emailVerified ? ' <span style="color:var(--warning)" title="Email non vérifié">·</span>' : ''}</td>
+      <td data-label="Forfait">${a.freeForever ? 'Gratuit à vie' : a.planTier ? PLAN_LABELS[a.planTier] : '—'}</td>
+      <td data-label="Statut"><span class="status-chip ${cls}"><span class="dot"></span>${ADMIN_STATUS_LABELS[a.planStatus] || a.planStatus}</span></td>
+      <td data-label="Canaux">${a.channels.length ? a.channels.map(connectorLabel).join(', ') : '<span style="color:var(--ink-faint)">—</span>'}</td>
+      <td data-label="Inscrit·e">${fmtDate(a.createdAt)}</td>
+    </tr>`;
+  }).join('');
+  return `
+    <div class="topbar">
+      <div><h1>Admin</h1><div class="sub">Vue interne — visible par vous seul</div></div>
+      <div class="topbar-actions">${rangeBar}${themeToggleHTML()}</div>
+    </div>
+    <div class="kpis">
+      <div class="kpi"><div class="label">Visiteurs — getcomptoir.fr</div><div class="row"><span class="value">${fmtNum(m.visitors)}</span></div>${sp}</div>
+      <div class="kpi"><div class="label">Pages vues</div><div class="row"><span class="value">${fmtNum(m.views)}</span></div></div>
+      <div class="kpi"><div class="label">Inscriptions (période)</div><div class="row"><span class="value">${fmtNum(t.signupsInRange)}</span></div></div>
+      <div class="kpi"><div class="label">Taux de conversion</div><div class="row"><span class="value">${d.conversion.toFixed(1)}%</span></div></div>
+    </div>
+    <div class="grid">
+      <div class="card"><h2>D'où viennent-ils ?</h2><div class="card-sub">Part des visiteurs par source</div>${m.sources.length ? bars(m.sources, totalSrc, r => escapeHTML(r.source)) : '<div class="empty">Pas encore de données — vérifiez que /t.js répond bien sur le site.</div>'}</div>
+      <div class="card"><h2>Pays</h2><div class="card-sub">Part des visiteurs (approximatif)</div>${m.countries.length ? bars(m.countries, totalC, r => r.country ? `${flagEmoji(r.country)} ${escapeHTML(countryName(r.country))}` : '<span style="color:var(--ink-faint)">Inconnu</span>') : '<div class="empty">Pas encore de données.</div>'}</div>
+    </div>
+    <div class="section-head"><h2>Comptes</h2><span>${fmtNum(t.accounts)} compte${t.accounts !== 1 ? 's' : ''} au total</span></div>
+    <div class="grid">
+      <div class="card"><h2>Par forfait</h2>${planRows}</div>
+      <div class="card"><h2>Par canal connecté</h2>${channelRows || '<div class="empty">Aucun canal connecté pour l\'instant.</div>'}</div>
+    </div>
+    <div class="card">
+      <h2>Tous les comptes</h2>
+      <div class="table-scroll"><table class="data table-cards">
+        <thead><tr><th>Compte</th><th>Forfait</th><th>Statut</th><th>Canaux</th><th>Inscrit·e</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table></div>
+    </div>
+  `;
+}
 /* ---------- page: stock ---------- */
 function pageStock() {
   const alerts = stockAlerts().length;
@@ -2999,10 +3075,12 @@ function renderNav() {
     'connecteurs': '<circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M8 5v3l2 2" fill="none" stroke="currentColor" stroke-width="1.3"/>',
     'facturation': '<rect x="2" y="4" width="12" height="8" rx="1.2" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M2 6.5h12" stroke="currentColor" stroke-width="1.3"/>',
     'comptabilite': '<path d="M3 2h10v12H3z" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M5.5 5h5M5.5 8h5M5.5 11h3" stroke="currentColor" stroke-width="1.3"/>',
-    'parametres': '<circle cx="8" cy="8" r="2.2" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M8 1.6v1.6M8 12.8v1.6M14.4 8h-1.6M3.2 8H1.6M12.4 3.6l-1.1 1.1M4.7 11.3l-1.1 1.1M12.4 12.4l-1.1-1.1M4.7 4.7l-1.1-1.1" stroke="currentColor" stroke-width="1.3"/>'
+    'parametres': '<circle cx="8" cy="8" r="2.2" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M8 1.6v1.6M8 12.8v1.6M14.4 8h-1.6M3.2 8H1.6M12.4 3.6l-1.1 1.1M4.7 11.3l-1.1 1.1M12.4 12.4l-1.1-1.1M4.7 4.7l-1.1-1.1" stroke="currentColor" stroke-width="1.3"/>',
+    'admin': '<path d="M8 1.5l5.5 2v4c0 3.6-2.3 5.9-5.5 7-3.2-1.1-5.5-3.4-5.5-7v-4z" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M5.7 8l1.7 1.7 3-3.4" fill="none" stroke="currentColor" stroke-width="1.3"/>'
   };
   const blockedCount = state.orders.filter(o => fulfillmentOf(o) === 'bloquee').length;
-  document.getElementById('nav').innerHTML = ROUTES.map(r => `
+  const navRoutes = isAdminSession() ? [...ROUTES, ADMIN_ROUTE] : ROUTES;
+  document.getElementById('nav').innerHTML = navRoutes.map(r => `
     <a href="#${r.path}" class="${path === r.path ? 'active' : ''}"><svg viewBox="0 0 16 16" fill="currentColor">${iconPaths[r.path]}</svg>${r.label}${r.path === 'expeditions' && blockedCount ? `<span class="nav-badge" title="${blockedCount} commande${blockedCount !== 1 ? 's' : ''} bloquée${blockedCount !== 1 ? 's' : ''}">${blockedCount}</span>` : ''}</a>
   `).join('');
 
@@ -3043,7 +3121,8 @@ function render() {
   const main = document.getElementById('main');
   const path = currentPath();
   if (path === 'connecteurs' || path === 'trafic') loadTracking();
-  const pages = { '': pageOverview, 'ventes': pageVentes, 'trafic': pageTrafic, 'expeditions': pageExpeditions, 'stock': pageStock, 'catalogue': pageCatalogue, 'sav': pageSAV, 'connecteurs': pageConnecteurs, 'facturation': pageFacturation, 'comptabilite': pageComptabilite, 'parametres': pageParametres };
+  if (path === 'admin') loadAdmin();
+  const pages = { '': pageOverview, 'ventes': pageVentes, 'trafic': pageTrafic, 'expeditions': pageExpeditions, 'admin': pageAdmin, 'stock': pageStock, 'catalogue': pageCatalogue, 'sav': pageSAV, 'connecteurs': pageConnecteurs, 'facturation': pageFacturation, 'comptabilite': pageComptabilite, 'parametres': pageParametres };
   main.innerHTML = (state.emailVerified === false ? verifyEmailBannerHTML() : '') + quotaBannerHTML() + (pages[path] || pageOverview)();
   if (path === '') {
     const bounds = getRangeBounds();
@@ -3448,6 +3527,7 @@ document.addEventListener('click', e => {
     persist(); render();
     return;
   }
+  if (action === 'setAdminRange') { adminRange = el.dataset.range === '7' ? '7' : el.dataset.range === '90' ? '90' : '30'; adminData = null; render(); return; }
   if (action === 'setShipSort') { setState({ shipSort: el.dataset.sort === 'desc' ? 'desc' : 'asc' }); return; }
   if (action === 'setNotifFrequency') {
     state.notifications.frequency = el.dataset.frequency === 'daily' ? 'daily' : 'instant';
