@@ -74,7 +74,7 @@
   <span class="eyebrow">Données personnelles</span>
   <h1>Politique de confidentialité</h1>
   <p class="lede">Comment Comptoir collecte, utilise et protège vos données, ainsi que celles de vos client·es lorsque vous utilisez l'application.</p>
-  <p class="updated">Dernière mise à jour : 9 septembre 2026</p>
+  <p class="updated">Dernière mise à jour : 24 septembre 2026</p>
 
   <div class="callout todo">
     <svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1zm.75 3.5v4.25h-1.5V4.5h1.5zm0 5.75v1.5h-1.5v-1.5h1.5z"/></svg>
@@ -124,29 +124,35 @@
   <h2 id="destinataires"><span class="n">4</span>Qui a accès à vos données</h2>
   <p>Vos données ne sont ni vendues, ni louées, ni partagées à des fins publicitaires. Elles sont accessibles à :</p>
   <ul>
-    <li><strong>L'équipe Comptoir</strong>, dans la stricte mesure nécessaire au support technique.</li>
+    <li><strong>L'équipe Comptoir</strong> (accès administrateur réservé à la personne qui édite le service), dans la stricte mesure nécessaire au support technique.</li>
     <li><strong>Notre hébergeur</strong> (Railway), qui stocke les données sur nos serveurs — voir <a href="#transferts">section 9</a> sur la localisation.</li>
+    <li><strong>Stripe</strong>, pour le traitement des paiements par carte bancaire — Comptoir ne voit ni ne stocke jamais votre numéro de carte.</li>
+    <li><strong>Brevo</strong>, pour l'envoi des emails transactionnels (confirmation de compte, réinitialisation de mot de passe, et les notifications par email que vous pouvez activer ou désactiver dans Paramètres) — seule votre adresse email et le contenu de l'email lui sont transmis.</li>
+    <li><strong>Cloudflare (R2)</strong>, pour les sauvegardes chiffrées automatiques de la base de données, à des fins de continuité de service en cas d'incident.</li>
+    <li><strong>Umami</strong>, pour une mesure d'audience anonyme et sans cookie du site — voir <a href="#cookies">section 8</a>.</li>
   </ul>
-  <p>Nous ne faisons appel à aucun autre sous-traitant à ce jour (pas d'outil d'analyse d'audience, pas d'envoi d'email marketing tiers).</p>
+  <p>Si vous connectez Shopify ou WooCommerce, Comptoir appelle l'API de cette plateforme (avec votre autorisation explicite) pour récupérer vos commandes — aucune autre donnée n'est lue ni modifiée sur votre boutique.</p>
 
   <h2 id="duree"><span class="n">5</span>Durée de conservation</h2>
-  <p>Vos données sont conservées tant que votre compte est actif. <span style="color:var(--critical);">Nous n'avons pas encore mis en place de purge automatique après une période d'inactivité — un compte supprimé n'est aujourd'hui effacé que sur demande manuelle (voir section 6).</span></p>
+  <p>Vos données sont conservées tant que votre compte est actif. Vous pouvez le supprimer vous-même à tout moment (voir section 6) : la suppression est immédiate. Les sauvegardes chiffrées (section 4) suivent leur propre cycle de rotation et disparaissent après quelques jours.</p>
 
   <h2 id="droits"><span class="n">6</span>Vos droits</h2>
   <p>Conformément au RGPD, vous disposez d'un droit d'accès, de rectification, d'effacement, de limitation, de portabilité et d'opposition sur vos données. Vous pouvez éditer vous-même la plupart de vos données directement dans l'application (Paramètres, Mon catalogue, Comptabilité).</p>
-  <p><span style="color:var(--critical);">Il n'existe pas encore de fonctionnalité de suppression de compte en libre-service.</span> Pour exercer un de ces droits, ou demander la suppression complète de votre compte, écrivez-nous — voir <a href="#contact">section 11</a>. Nous répondons dans un délai maximum d'un mois.</p>
+  <p>Depuis <strong>Paramètres → Mes données</strong>, vous pouvez à tout moment <strong>exporter</strong> l'ensemble de vos données de compte (format JSON) ou <strong>supprimer définitivement votre compte</strong> (après confirmation par mot de passe) — la suppression efface vos commandes, produits, connecteurs et clés API, et résilie un abonnement en cours. Pour toute autre demande liée à vos droits, écrivez-nous — voir <a href="#contact">section 11</a>. Nous répondons dans un délai maximum d'un mois.</p>
 
   <h2 id="securite"><span class="n">7</span>Sécurité des données</h2>
   <p>Les mots de passe sont hachés (PBKDF2-HMAC-SHA256, 100 000 itérations, sel unique par compte) — jamais stockés en clair. Les échanges avec l'application sont chiffrés (HTTPS). L'accès à vos données nécessite une session authentifiée par jeton, invalidée après 30 jours d'inactivité.</p>
 
   <h2 id="cookies"><span class="n">8</span>Cookies et stockage local</h2>
-  <p>Comptoir n'utilise <strong>aucun cookie tiers, aucun traceur publicitaire, aucun outil d'analyse d'audience</strong>. L'application utilise le stockage local de votre navigateur (localStorage) uniquement pour deux choses strictement nécessaires à son fonctionnement : garder votre session connectée, et retenir votre préférence d'affichage (thème clair/sombre). Rien n'est transmis à un tiers via ce stockage.</p>
+  <p>Comptoir n'utilise <strong>aucun cookie</strong>, ni de session ni publicitaire, sur getcomptoir.fr. L'application utilise le stockage local de votre navigateur (localStorage) uniquement pour deux choses strictement nécessaires à son fonctionnement : garder votre session connectée, et retenir votre préférence d'affichage (thème clair/sombre). Rien n'est transmis à un tiers via ce stockage.</p>
+  <p>Le site utilise <strong>Umami</strong> et un compteur de visites interne, deux outils de mesure d'audience <strong>sans cookie et sans identifiant permanent</strong> : un visiteur y est reconnu par un code recalculé chaque jour puis effacé, jamais par un identifiant qui le suit d'une visite à l'autre. Seuls des totaux agrégés (nombre de visites, page, provenance, pays approximatif) sont conservés. C'est pourquoi aucun bandeau de consentement n'est nécessaire pour ce comptage.</p>
 
   <h2 id="transferts"><span class="n">9</span>Transferts hors Union européenne</h2>
   <p><span style="color:var(--critical);">La région d'hébergement exacte de nos serveurs (via Railway) est en cours de vérification.</span> Si vos données venaient à être hébergées hors de l'Union européenne, nous nous engageons à nous appuyer sur un mécanisme de transfert reconnu par le RGPD (clauses contractuelles types ou équivalent).</p>
 
   <h2 id="marchandes"><span class="n">10</span>Si vous êtes marchande : vos propres client·es</h2>
   <p>Si vous utilisez Comptoir pour suivre vos ventes, les noms de vos client·es que vous saisissez ou que votre site transmet via un connecteur sont traités par Comptoir <strong>pour votre compte</strong>. Vous restez responsable de traitement vis-à-vis de vos propres client·es ; Comptoir agit comme sous-traitant au sens de l'article 28 du RGPD.</p>
+  <p>Si vous activez le <strong>suivi des visiteurs</strong> (script à coller sur votre site), Comptoir compte les visiteurs de votre propre site pour votre compte, avec les mêmes garanties que celles décrites en <a href="#cookies">section 8</a> : sans cookie, sans identifiant permanent, seuls des totaux agrégés sont conservés. Vous restez responsable de l'information de vos visiteurs si votre propre politique de confidentialité l'exige.</p>
   <p><span style="color:var(--critical);">Un contrat de sous-traitance formel n'est pas encore mis en place — il est en préparation.</span> En attendant, nous nous engageons aux mêmes garanties de sécurité et de confidentialité que celles décrites dans ce document pour l'ensemble des données que nous traitons.</p>
 
   <h2 id="contact"><span class="n">11</span>Contact &amp; réclamation</h2>
